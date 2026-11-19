@@ -521,6 +521,133 @@ export function registerAllHandlers(db: Database.Database): void {
     return { success: true }
   })
 
+  ipcMain.handle('orders:printInvoice', async (_e, orderId: number) => {
+    const order = db.prepare(`SELECT * FROM orders WHERE id=?`).get(orderId) as Record<string, unknown> | undefined
+    if (!order) throw new Error('Order not found')
+    const items = db.prepare(
+      `SELECT oi.product_name, oi.quantity, oi.unit_price, oi.line_total, COALESCE(c.name, '') as category_name
+       FROM order_items oi
+       LEFT JOIN products p ON p.id=oi.product_id
+       LEFT JOIN categories c ON c.id=p.category_id
+       WHERE oi.order_id=?`
+    ).all(orderId) as Array<{
+      product_name: string
+      quantity: number
+      unit_price: number
+      line_total: number
+      category_name: string
+    }>
+    const settings = Object.fromEntries(
+      (db.prepare(`SELECT key, value FROM settings`).all() as Array<{ key: string; value: string }>).map(
+        (r) => [r.key, r.value]
+      )
+    )
+    const totalQuantity = items.reduce((total, item) => total + Number(item.quantity), 0)
+    const rows = items
+      .map(
+        (item, index) => `<tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(item.product_name)}</td>
+          <td>${escapeHtml(item.category_name)}</td>
+          <td class="number">${Number(item.quantity).toLocaleString()}</td>
+          <td class="number">Rs. ${Number(item.unit_price).toFixed(0)}</td>
+          <td class="number">Rs. ${Number(item.line_total).toFixed(0)}</td>
+        </tr>`
+      )
+      .join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Invoice</title>
+      <style>
+        @page { size: A4 portrait; margin: 14mm 16mm; }
+        * { box-sizing: border-box; }
+        body { margin: 0; color: #292722; background: #ececec; font: 12px Arial, sans-serif; }
+        .preview-toolbar { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #292722; color: white; }
+        .preview-toolbar button { padding: 8px 14px; border: 0; border-radius: 5px; background: #aa8b3c; color: white; font-weight: 700; cursor: pointer; }
+        .invoice { width: 100%; max-width: 790px; min-height: 1000px; margin: 24px auto; padding: 56px 64px; background: white; box-shadow: 0 2px 12px #0002; }
+        .header { padding-bottom: 10px; border-bottom: 2px solid #aa8b3c; text-align: right; }
+        .shop-name { margin: 0; color: #755c22; font-size: 18px; font-weight: 700; }
+        .shop-contact { margin-top: 4px; color: #666; font-size: 10px; }
+        .invoice-title { margin: 4px 0 6px; color: #9a792b; font-size: 11px; letter-spacing: 1.2px; }
+        .meta { display: grid; gap: 3px; justify-items: end; font-size: 10px; }
+        .section-title { margin: 0 0 8px; padding-bottom: 5px; color: #967728; border-bottom: 1px solid #d9c99c; font-size: 10px; letter-spacing: 1px; }
+        .customer { margin: 14px 0 18px; }
+        .customer-row { display: flex; gap: 28px; font-size: 10px; }
+        .customer-row div { min-width: 150px; }
+        .customer-label { display: block; margin-bottom: 3px; color: #888; font-size: 9px; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; }
+        th { padding: 7px 4px; color: #666; border-bottom: 1px solid #cfc7b2; font-size: 8px; text-align: left; text-transform: uppercase; }
+        td { padding: 7px 4px; border-bottom: 1px solid #e8e4da; font-size: 10px; }
+        tr { break-inside: avoid; }
+        .number { text-align: right; white-space: nowrap; }
+        .summary { width: 48%; min-width: 250px; margin: 18px 0 0 auto; }
+        .summary-row { display: flex; justify-content: space-between; padding: 5px 0; }
+        .grand-total { margin-top: 4px; padding: 8px 0; border-top: 1px solid #aa8b3c; border-bottom: 1px solid #aa8b3c; font-size: 15px; font-weight: 700; }
+        .signature { width: 180px; margin-top: 48px; padding-top: 5px; border-top: 1px solid #555; color: #666; font-size: 10px; text-align: center; }
+        .footer { margin-top: 22px; color: #777; font-size: 10px; text-align: center; }
+        @media print {
+          body { background: white; }
+          .preview-toolbar { display: none; }
+          .invoice { width: 100%; max-width: 620px; min-height: 0; margin: 0 auto; padding: 0; box-shadow: none; }
+        }
+      </style></head><body>
+        <div class="preview-toolbar">
+          <strong>Invoice Preview</strong>
+          <button type="button" onclick="window.print()">Print Invoice</button>
+        </div>
+        <main class="invoice">
+        <header class="header">
+          <h1 class="shop-name">${escapeHtml(settings.shop_name || 'SHAFI TIKKA')}</h1>
+          <h2 class="invoice-title">SALE RECEIPT</h2>
+          <div class="meta">
+            <div>Invoice # ${escapeHtml(String(order.order_number))}</div>
+            <div>Date ${escapeHtml(String(order.created_at))}</div>
+            ${settings.shop_phone ? `<div>Shop Phone ${escapeHtml(settings.shop_phone)}</div>` : ''}
+          </div>
+          ${settings.shop_address ? `<div class="shop-contact">${escapeHtml(settings.shop_address)}</div>` : ''}
+        </header>
+        <section class="customer">
+          <h3 class="section-title">CUSTOMER DETAILS</h3>
+          <div class="customer-row">
+            <div><span class="customer-label">Customer</span>${escapeHtml(String(order.customer_name || 'Walk-in Customer'))}</div>
+            ${order.customer_phone ? `<div><span class="customer-label">Phone</span>${escapeHtml(String(order.customer_phone))}</div>` : ''}
+          </div>
+        </section>
+        <section>
+          <h3 class="section-title">SALE DETAILS</h3>
+          <table>
+            <thead><tr><th>Item</th><th>Name</th><th>Category</th><th class="number">Qty</th><th class="number">Price / Item</th><th class="number">Price</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </section>
+        <section class="summary">
+          <div class="summary-row"><span>Quantity</span><strong>${totalQuantity.toLocaleString()}</strong></div>
+          <div class="summary-row"><span>Subtotal</span><span>Rs. ${Number(order.subtotal).toFixed(0)}</span></div>
+          <div class="summary-row"><span>Discount</span><span>Rs. ${Number(order.discount).toFixed(0)}</span></div>
+          <div class="summary-row grand-total"><span>Grand Total</span><span>Rs. ${Number(order.grand_total).toFixed(0)}</span></div>
+        </section>
+        <div class="signature">Owner's Signature</div>
+        <footer class="footer">${escapeHtml(settings.receipt_footer || 'Thank you!')}</footer>
+      </main></body></html>`
+
+    const win = new BrowserWindow({
+      show: false,
+      width: 900,
+      height: 1100,
+      title: 'Invoice Preview',
+      autoHideMenuBar: true,
+      webPreferences: { sandbox: true },
+    })
+    try {
+      await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    } catch (error) {
+      if (!win.isDestroyed()) win.destroy()
+      throw error
+    }
+    win.show()
+    win.focus()
+
+    return { success: true }
+  })
+
   // ── Dashboard ──
   ipcMain.handle('dashboard:stats', () => {
     const today = todayLocal()
