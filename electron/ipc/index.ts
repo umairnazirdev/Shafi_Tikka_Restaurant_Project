@@ -3,7 +3,7 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { getDatabasePath } from '../db/connection'
-import { deductRecipesForOrder, restoreRecipesForOrder, adjustStock } from '../services/stock'
+import { adjustStock } from '../services/stock'
 import {
   generateOrderNumber,
   generatePurchaseNumber,
@@ -164,6 +164,20 @@ export function registerAllHandlers(db: Database.Database): void {
   ipcMain.handle('categories:delete', (_e, id: number) => {
     db.prepare(`UPDATE categories SET is_active=0 WHERE id=?`).run(id)
     return { success: true }
+  })
+
+  // ── Waiters ──
+  ipcMain.handle('waiters:list', () =>
+    db.prepare(`SELECT id, name FROM waiters ORDER BY name COLLATE NOCASE`).all()
+  )
+
+  ipcMain.handle('waiters:create', (_e, name: string) => {
+    if (typeof name !== 'string' || !name.trim()) throw new Error('Waiter name required')
+    const trimmedName = name.trim()
+    const existing = db.prepare(`SELECT id FROM waiters WHERE name=?`).get(trimmedName)
+    if (existing) throw new Error('A waiter with this name already exists')
+    const result = db.prepare(`INSERT INTO waiters (name) VALUES (?)`).run(trimmedName)
+    return { id: Number(result.lastInsertRowid) }
   })
 
   // ── Products ──
@@ -348,8 +362,7 @@ export function registerAllHandlers(db: Database.Database): void {
           `INSERT INTO payments (order_id, method, amount) VALUES (?, ?, ?)`
         ).run(orderId, data.payment_method, grandTotal)
 
-        const cogs = deductRecipesForOrder(db, orderId)
-        db.prepare(`UPDATE orders SET cogs=? WHERE id=?`).run(cogs, orderId)
+        db.prepare(`UPDATE orders SET cogs=0 WHERE id=?`).run(orderId)
 
         if (data.customer_name?.trim()) {
           const existing = data.customer_phone
@@ -412,7 +425,6 @@ export function registerAllHandlers(db: Database.Database): void {
     if (order.status === 'cancelled') throw new Error('Order already cancelled')
 
     const run = db.transaction(() => {
-      restoreRecipesForOrder(db, id)
       db.prepare(
         `UPDATE orders SET status='cancelled', cancelled_at=datetime('now','localtime') WHERE id=?`
       ).run(id)
@@ -1054,9 +1066,8 @@ export function registerAllHandlers(db: Database.Database): void {
     const d = date || todayLocal()
     const stats = dayStats(db, d)
     const expectedCash = roundMoney(
-      Number(openingCash) + stats.cashSales - stats.totalPurchases - stats.totalExpenses
+      Number(openingCash) + stats.cashSales - stats.totalExpenses
     )
-    // Note: purchases paid in cash reduce expected cash; COGS is for profit only (not double-counted in cash)
     return {
       ...stats,
       openingCash: Number(openingCash) || 0,
@@ -1078,7 +1089,7 @@ export function registerAllHandlers(db: Database.Database): void {
       const d = data.closing_date || todayLocal()
       const stats = dayStats(db, d)
       const opening = Number(data.opening_cash) || 0
-      const expected = roundMoney(opening + stats.cashSales - stats.totalPurchases - stats.totalExpenses)
+      const expected = roundMoney(opening + stats.cashSales - stats.totalExpenses)
       const actual = Number(data.actual_closing_cash) || 0
       const difference = roundMoney(actual - expected)
 

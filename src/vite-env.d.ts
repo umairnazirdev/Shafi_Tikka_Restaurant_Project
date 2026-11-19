@@ -12,6 +12,8 @@ interface Window {
     createCategory(name: string): Promise<{ id: number }>
     updateCategory(id: number, name: string): Promise<{ success: boolean }>
     deleteCategory(id: number): Promise<{ success: boolean }>
+    listWaiters(): Promise<Waiter[]>
+    createWaiter(name: string): Promise<{ id: number }>
     listProducts(filters?: { search?: string; available_only?: boolean; category_id?: number }): Promise<Product[]>
     createProduct(data: unknown): Promise<{ id: number }>
     updateProduct(id: number, data: unknown): Promise<{ success: boolean }>
@@ -47,6 +49,11 @@ interface Window {
     listClosings(): Promise<DailyClosing[]>
     getClosing(date: string): Promise<DailyClosing | null>
   }
+}
+
+interface Waiter {
+  id: number
+  name: string
 }
 
 interface Category {

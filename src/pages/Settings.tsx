@@ -10,7 +10,6 @@ type SettingsForm = {
   shop_phone: string
   receipt_width: string
   receipt_footer: string
-  allow_negative_stock: boolean
   printer_silent: boolean
 }
 
@@ -20,7 +19,6 @@ const defaults: SettingsForm = {
   shop_phone: '',
   receipt_width: '80',
   receipt_footer: 'Thank you!',
-  allow_negative_stock: false,
   printer_silent: true,
 }
 
@@ -40,7 +38,6 @@ export default function Settings() {
         shop_phone: s.shop_phone || '',
         receipt_width: s.receipt_width || '80',
         receipt_footer: s.receipt_footer || defaults.receipt_footer,
-        allow_negative_stock: s.allow_negative_stock === '1' || s.allow_negative_stock === 'true',
         printer_silent: s.printer_silent !== '0' && s.printer_silent !== 'false',
       })
     } catch (e) {
@@ -63,7 +60,6 @@ export default function Settings() {
         shop_phone: form.shop_phone.trim(),
         receipt_width: form.receipt_width === '58' ? '58' : '80',
         receipt_footer: form.receipt_footer,
-        allow_negative_stock: form.allow_negative_stock ? '1' : '0',
         printer_silent: form.printer_silent ? '1' : '0',
       })
       toast.success('Settings saved')
@@ -150,7 +146,7 @@ export default function Settings() {
         </div>
 
         <div className="card">
-          <h3 style={{ marginTop: 0 }}>Receipt & stock</h3>
+          <h3 style={{ marginTop: 0 }}>Receipt</h3>
           <div className="form-grid">
             <label className="field">
               Receipt width (mm)
@@ -168,16 +164,6 @@ export default function Settings() {
                 value={form.receipt_footer}
                 onChange={(e) => setForm((f) => ({ ...f, receipt_footer: e.target.value }))}
               />
-            </label>
-            <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <input
-                type="checkbox"
-                checked={form.allow_negative_stock}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, allow_negative_stock: e.target.checked }))
-                }
-              />
-              Allow negative stock
             </label>
             <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <input

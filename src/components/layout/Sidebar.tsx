@@ -1,12 +1,10 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   ShoppingCart,
   Package,
   Receipt,
-  Boxes,
-  ChefHat,
-  Truck,
+  Users,
   Wallet,
   CalendarCheck,
   Settings,
@@ -17,17 +15,32 @@ const links = [
   { to: '/pos', label: 'POS', icon: ShoppingCart },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/orders', label: 'Orders', icon: Receipt },
-  { to: '/stock', label: 'Stock', icon: Boxes },
-  { to: '/recipes', label: 'Recipes', icon: ChefHat },
-  { to: '/purchases', label: 'Purchases', icon: Truck },
+  { to: '/waiters', label: 'Waiters', icon: Users },
   { to: '/expenses', label: 'Expenses', icon: Wallet },
   { to: '/reports', label: 'Daily Report', icon: CalendarCheck },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
-export function Sidebar() {
+export function Sidebar({
+  posView,
+  draftOrderCount,
+  onPosViewChange,
+}: {
+  posView: 'menu' | 'orders'
+  draftOrderCount: number
+  onPosViewChange: (view: 'menu' | 'orders') => void
+}) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isPos = location.pathname === '/pos'
+
+  function openPosView(view: 'menu' | 'orders') {
+    onPosViewChange(view)
+    navigate('/pos')
+  }
+
   return (
-    <aside className="sidebar">
+    <header className="sidebar">
       <div className="brand">
         <div className="brand-mark">ST</div>
         <div>
@@ -37,12 +50,36 @@ export function Sidebar() {
       </div>
       <nav className="side-nav">
         {links.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) => (isActive ? 'active' : '')}
+          >
             <Icon size={18} />
             <span>{label}</span>
           </NavLink>
         ))}
       </nav>
-    </aside>
+      <div className="nav-actions">
+        <div className="pos-topbar">
+          <button
+            type="button"
+            className={`pos-top-button ${isPos && posView === 'menu' ? 'active' : ''}`}
+            onClick={() => openPosView('menu')}
+          >
+            Menu
+          </button>
+          <button
+            type="button"
+            className={`pos-top-button ${isPos && posView === 'orders' ? 'active' : ''}`}
+            onClick={() => openPosView('orders')}
+          >
+            Order
+            <span className="pos-order-count">{draftOrderCount}</span>
+          </button>
+        </div>
+      </div>
+    </header>
   )
 }

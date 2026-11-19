@@ -289,7 +289,7 @@ export default function Orders() {
       {cancelTarget && (
         <ConfirmDialog
           title="Cancel order"
-          message={`Cancel order ${cancelTarget.order_number}? Recipe stock will be restored if applicable.`}
+          message={`Cancel order ${cancelTarget.order_number}?`}
           confirmLabel="Cancel order"
           danger
           onClose={() => setCancelTarget(null)}

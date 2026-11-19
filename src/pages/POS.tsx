@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { Plus, Minus, Trash2, Printer, Save, RotateCcw } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
 import { formatMoney } from '../lib/format'
@@ -14,8 +15,24 @@ type CartLine = {
   quantity: number
 }
 
+type DraftOrder = {
+  number: number
+  cart: CartLine[]
+  discount: number
+  paymentMethod: 'cash' | 'card' | 'other'
+  cashReceived: number
+}
+
+type PosOutletContext = {
+  posView: 'menu' | 'orders'
+  setPosView: (view: 'menu' | 'orders') => void
+  setDraftOrderCount: (count: number) => void
+}
+
 export default function POS() {
   const toast = useToast()
+  const { posView: activeView, setPosView: setActiveView, setDraftOrderCount } =
+    useOutletContext<PosOutletContext>()
   const [loading, setLoading] = useState(true)
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -95,8 +112,12 @@ export default function POS() {
 
   function setQty(productId: number, quantity: number) {
     setCart((prev) => {
-      if (quantity <= 0) return prev.filter((c) => c.product_id !== productId)
-      return prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
+      const next =
+        quantity <= 0
+          ? prev.filter((c) => c.product_id !== productId)
+          : prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
+      syncDraft({ cart: next })
+      return next
     })
     if (quantity <= 0) {
       setCartQuantityDrafts((prev) => {
@@ -146,7 +167,29 @@ export default function POS() {
       if (printAfter) {
         await window.api.printReceipt(result.id)
       }
-      clearCart()
+      const remaining = draftOrders
+        .filter((draft) => draft.number !== activeDraftNumber)
+        .sort((a, b) => a.number - b.number)
+      setDraftOrders(remaining)
+      setCart([])
+      setCartQuantityDrafts({})
+      setDiscount(0)
+      setPaymentMethod('cash')
+      setCashReceived(0)
+      if (remaining.length > 0) {
+        openDraft(remaining[0].number)
+      } else {
+        const number = nextDraftNumber
+        setDraftOrders([{
+          number,
+          cart: [],
+          discount: 0,
+          paymentMethod: 'cash',
+          cashReceived: 0,
+        }])
+        setNextDraftNumber((prev) => prev + 1)
+        setActiveDraftNumber(number)
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save order')
     } finally {
@@ -170,15 +213,23 @@ export default function POS() {
   useEffect(() => {
     if (paymentMethod === 'cash' && cashReceived < grandTotal) {
       setCashReceived(grandTotal)
+      syncDraft({ cashReceived: grandTotal })
     }
   }, [grandTotal, paymentMethod])
+
+  useEffect(() => {
+    setDraftOrderCount(draftOrders.length)
+  }, [draftOrders.length, setDraftOrderCount])
 
   if (loading) return <Loading label="Loading POS..." />
 
   return (
-    <div className="pos-layout">
-      <section className="pos-products">
-        <div className="toolbar">
+    <div>
+      <div className="pos-layout">
+        <section className="pos-products">
+          {activeView === 'menu' ? (
+            <>
+              <div className="toolbar">
           <input
             placeholder="Search products..."
             value={search}
@@ -188,8 +239,8 @@ export default function POS() {
           <button type="button" className="btn btn-ghost" onClick={() => void load()}>
             Refresh
           </button>
-        </div>
-        <div className="chip-row">
+              </div>
+              <div className="chip-row">
           <button
             type="button"
             className={`chip ${categoryId === 'all' ? 'active' : ''}`}
@@ -207,11 +258,11 @@ export default function POS() {
               {c.name}
             </button>
           ))}
-        </div>
-        {filtered.length === 0 ? (
-          <EmptyState title="No products found" hint="Add products from the Products page." />
-        ) : (
-          <div className="product-grid">
+              </div>
+              {filtered.length === 0 ? (
+                <EmptyState title="No products found" hint="Add products from the Products page." />
+              ) : (
+                <div className="product-grid">
             {filtered.map((p) => {
               const qty = qtyInCart(p.id)
               const selectedQuantity = selectedQuantities[p.id] ?? 1
@@ -244,16 +295,42 @@ export default function POS() {
                 </div>
               )
             })}
-          </div>
-        )}
-      </section>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="pos-order-browser">
+              <h2>Current Orders</h2>
+              <p>First come, first served</p>
+              <div className="pos-order-list">
+                {[...draftOrders].sort((a, b) => a.number - b.number).map((draft) => (
+                  <button
+                    key={draft.number}
+                    type="button"
+                    className={`pos-order-card ${draft.number === activeDraftNumber ? 'active' : ''}`}
+                    onClick={() => openDraft(draft.number)}
+                  >
+                    <span className="pos-order-number">#{draft.number}</span>
+                    <strong>{draft.cart.length ? `${draft.cart.length} item(s)` : 'New order'}</strong>
+                    <span>{formatMoney(draft.cart.reduce((sum, item) => sum + item.quantity * item.unit_price, 0) - draft.discount)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
 
       <aside className="cart-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>Current Order</h2>
-          <button type="button" className="btn btn-ghost" onClick={clearCart} title="New Order">
-            <RotateCcw size={16} /> New
-          </button>
+          <h2>Order #{activeDraftNumber}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button type="button" className="btn pos-new-button" onClick={createNewOrder}>
+              <Plus size={14} /> New
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={clearCart} title="Clear current order">
+              <RotateCcw size={16} /> Clear
+            </button>
+          </div>
         </div>
 
         <div className="cart-list">
@@ -332,7 +409,11 @@ export default function POS() {
               Payment
               <select
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as 'cash' | 'card' | 'other')}
+                onChange={(e) => {
+                  const nextPayment = e.target.value as 'cash' | 'card' | 'other'
+                  setPaymentMethod(nextPayment)
+                  syncDraft({ paymentMethod: nextPayment })
+                }}
               >
                 <option value="cash">Cash</option>
                 <option value="card">Card</option>
@@ -347,7 +428,11 @@ export default function POS() {
                 type="number"
                 min={0}
                 value={cashReceived}
-                onChange={(e) => setCashReceived(Number(e.target.value) || 0)}
+                onChange={(e) => {
+                  const nextCashReceived = Number(e.target.value) || 0
+                  setCashReceived(nextCashReceived)
+                  syncDraft({ cashReceived: nextCashReceived })
+                }}
               />
             </label>
           )}
@@ -393,6 +478,7 @@ export default function POS() {
           </button>
         </div>
       </aside>
+      </div>
     </div>
   )
 }
