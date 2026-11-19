@@ -5,6 +5,7 @@ import { formatMoney } from '../lib/format'
 import { Loading } from '../components/ui/Loading'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ProductThumb } from '../components/ProductThumb'
+import { ProductQuantitySelector } from '../components/ui/ProductQuantitySelector'
 
 type CartLine = {
   product_id: number
@@ -21,14 +22,13 @@ export default function POS() {
   const [categoryId, setCategoryId] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartLine[]>([])
-  const [customerName, setCustomerName] = useState('')
-  const [customerPhone, setCustomerPhone] = useState('')
-  const [notes, setNotes] = useState('')
+  const [cartQuantityDrafts, setCartQuantityDrafts] = useState<Record<number, string>>({})
   const [discount, setDiscount] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'other'>('cash')
   const [cashReceived, setCashReceived] = useState(0)
   const [saving, setSaving] = useState(false)
   const [lastOrderId, setLastOrderId] = useState<number | null>(null)
+  const [selectedQuantities, setSelectedQuantities] = useState<Record<number, number>>({})
 
   async function load() {
     setLoading(true)
@@ -64,19 +64,17 @@ export default function POS() {
   )
   const safeDiscount = Math.min(Math.max(0, Number(discount) || 0), subtotal)
   const grandTotal = Math.max(0, subtotal - safeDiscount)
-  const changeAmount =
-    paymentMethod === 'cash' ? Math.max(0, (Number(cashReceived) || 0) - grandTotal) : 0
 
   function qtyInCart(productId: number) {
     return cart.find((c) => c.product_id === productId)?.quantity || 0
   }
 
-  function addProduct(product: Product) {
+  function addProduct(product: Product, quantity = 1) {
     setCart((prev) => {
       const existing = prev.find((c) => c.product_id === product.id)
       if (existing) {
         return prev.map((c) =>
-          c.product_id === product.id ? { ...c, quantity: c.quantity + 1 } : c
+          c.product_id === product.id ? { ...c, quantity: c.quantity + quantity } : c
         )
       }
       return [
@@ -85,10 +83,14 @@ export default function POS() {
           product_id: product.id,
           product_name: product.name,
           unit_price: product.selling_price,
-          quantity: 1,
+          quantity,
         },
       ]
     })
+  }
+
+  function setSelectedQuantity(productId: number, quantity: number) {
+    setSelectedQuantities((prev) => ({ ...prev, [productId]: Math.max(1, quantity) }))
   }
 
   function setQty(productId: number, quantity: number) {
@@ -96,17 +98,21 @@ export default function POS() {
       if (quantity <= 0) return prev.filter((c) => c.product_id !== productId)
       return prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
     })
+    if (quantity <= 0) {
+      setCartQuantityDrafts((prev) => {
+        const next = { ...prev }
+        delete next[productId]
+        return next
+      })
+    }
   }
 
   function clearCart() {
     setCart([])
-    setCustomerName('')
-    setCustomerPhone('')
-    setNotes('')
+    setCartQuantityDrafts({})
     setDiscount(0)
     setPaymentMethod('cash')
     setCashReceived(0)
-    setLastOrderId(null)
   }
 
   async function saveOrder(printAfter: boolean) {
@@ -122,9 +128,9 @@ export default function POS() {
     setSaving(true)
     try {
       const result = await window.api.createOrder({
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        notes,
+        customer_name: '',
+        customer_phone: '',
+        notes: '',
         discount: safeDiscount,
         payment_method: paymentMethod,
         cash_received: paymentMethod === 'cash' ? Number(cashReceived) || grandTotal : 0,
@@ -150,11 +156,12 @@ export default function POS() {
 
   async function reprintLast() {
     if (!lastOrderId) {
-      toast.info('No recent order to print')
+      toast.info('Save an order before printing an invoice')
       return
     }
     try {
-      await window.api.printReceipt(lastOrderId)
+      await window.api.printInvoice(lastOrderId)
+      toast.success('Invoice preview opened')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Print failed')
     }
@@ -207,16 +214,34 @@ export default function POS() {
           <div className="product-grid">
             {filtered.map((p) => {
               const qty = qtyInCart(p.id)
+              const selectedQuantity = selectedQuantities[p.id] ?? 1
               return (
-                <button key={p.id} type="button" className="product-tile" onClick={() => addProduct(p)}>
+                <div
+                  key={p.id}
+                  className="product-tile"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => addProduct(p)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      addProduct(p)
+                    }
+                  }}
+                >
                   {qty > 0 && <span className="qty-badge">{qty}</span>}
                   <ProductThumb name={p.name} imagePath={p.image_path} />
                   <strong>{p.name}</strong>
                   <div className="price">{formatMoney(p.selling_price)}</div>
-                  <span className="btn btn-primary" style={{ padding: '6px 8px', fontSize: 12 }}>
-                    <Plus size={14} /> Add
-                  </span>
-                </button>
+                  <ProductQuantitySelector
+                    quantity={selectedQuantity}
+                    onQuantityChange={(quantity) => setSelectedQuantity(p.id, quantity)}
+                    onAdd={(quantity) => {
+                      addProduct(p, quantity)
+                      setSelectedQuantity(p.id, 1)
+                    }}
+                  />
+                </div>
               )
             })}
           </div>
@@ -246,7 +271,34 @@ export default function POS() {
                 <button type="button" onClick={() => setQty(item.product_id, item.quantity - 1)}>
                   <Minus size={14} />
                 </button>
-                <strong>{item.quantity}</strong>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={cartQuantityDrafts[item.product_id] ?? String(item.quantity)}
+                  aria-label={`Quantity for ${item.product_name}`}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setCartQuantityDrafts((prev) => ({ ...prev, [item.product_id]: value }))
+                    const quantity = Number(value)
+                    if (Number.isInteger(quantity) && quantity >= 1) {
+                      setQty(item.product_id, quantity)
+                    }
+                  }}
+                  onBlur={() => {
+                    const draft = cartQuantityDrafts[item.product_id]
+                    const quantity = draft === undefined ? item.quantity : Number(draft)
+                    setQty(
+                      item.product_id,
+                      Number.isInteger(quantity) && quantity >= 1 ? quantity : Math.max(1, item.quantity)
+                    )
+                    setCartQuantityDrafts((prev) => {
+                      const next = { ...prev }
+                      delete next[item.product_id]
+                      return next
+                    })
+                  }}
+                />
                 <button type="button" onClick={() => setQty(item.product_id, item.quantity + 1)}>
                   <Plus size={14} />
                 </button>
@@ -259,18 +311,6 @@ export default function POS() {
         </div>
 
         <div className="cart-fields">
-          <label>
-            Customer name
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Optional" />
-          </label>
-          <label>
-            Phone
-            <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Optional" />
-          </label>
-          <label>
-            Notes
-            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
-          </label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label>
               Discount
@@ -278,7 +318,14 @@ export default function POS() {
                 type="number"
                 min={0}
                 value={discount}
-                onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                onChange={(e) => {
+                  const nextDiscount = Number(e.target.value) || 0
+                  setDiscount(nextDiscount)
+                  if (paymentMethod === 'cash') {
+                    const appliedDiscount = Math.min(Math.max(0, nextDiscount), subtotal)
+                    setCashReceived(Math.max(0, subtotal - appliedDiscount))
+                  }
+                }}
               />
             </label>
             <label>
@@ -319,12 +366,6 @@ export default function POS() {
             <span>Grand Total</span>
             <span>{formatMoney(grandTotal)}</span>
           </div>
-          {paymentMethod === 'cash' && (
-            <div>
-              <span>Change</span>
-              <span>{formatMoney(changeAmount)}</span>
-            </div>
-          )}
         </div>
 
         <div className="cart-actions">

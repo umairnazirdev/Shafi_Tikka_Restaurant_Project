@@ -21,6 +21,7 @@ interface Window {
     getOrder(id: number): Promise<OrderDetail>
     cancelOrder(id: number): Promise<{ success: boolean }>
     printReceipt(orderId: number): Promise<{ success: boolean }>
+    printInvoice(orderId: number): Promise<{ success: boolean }>
     getDashboardStats(): Promise<DashboardStats>
     getDailyReport(date?: string): Promise<{ summary: DailySummary; orders: Order[] }>
     listMaterials(search?: string): Promise<RawMaterial[]>

@@ -23,6 +23,7 @@ const api = {
   getOrder: (id: number) => ipcRenderer.invoke('orders:get', id),
   cancelOrder: (id: number) => ipcRenderer.invoke('orders:cancel', id),
   printReceipt: (orderId: number) => ipcRenderer.invoke('orders:printReceipt', orderId),
+  printInvoice: (orderId: number) => ipcRenderer.invoke('orders:printInvoice', orderId),
 
   getDashboardStats: () => ipcRenderer.invoke('dashboard:stats'),
   getDailyReport: (date?: string) => ipcRenderer.invoke('reports:daily', date),
