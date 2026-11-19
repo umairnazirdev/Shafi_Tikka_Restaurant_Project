@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Minus, Trash2, Printer, Save, RotateCcw } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
@@ -31,14 +31,23 @@ type PosOutletContext = {
 
 export default function POS() {
   const toast = useToast()
-  const { posView: activeView, setPosView: setActiveView, setDraftOrderCount } =
-    useOutletContext<PosOutletContext>()
+  const { posView: activeView, setDraftOrderCount } = useOutletContext<PosOutletContext>()
   const [loading, setLoading] = useState(true)
+  const [desktopUnavailable, setDesktopUnavailable] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartLine[]>([])
+  const [draftOrders, setDraftOrders] = useState<DraftOrder[]>([{
+    number: 1,
+    cart: [],
+    discount: 0,
+    paymentMethod: 'cash',
+    cashReceived: 0,
+  }])
+  const [activeDraftNumber, setActiveDraftNumber] = useState(1)
+  const [nextDraftNumber, setNextDraftNumber] = useState(2)
   const [cartQuantityDrafts, setCartQuantityDrafts] = useState<Record<number, string>>({})
   const [discount, setDiscount] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'other'>('cash')
@@ -47,9 +56,13 @@ export default function POS() {
   const [lastOrderId, setLastOrderId] = useState<number | null>(null)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<number, number>>({})
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
+      if (!window.api) {
+        setDesktopUnavailable(true)
+        return
+      }
       const [cats, prods] = await Promise.all([
         window.api.listCategories(),
         window.api.listProducts({ available_only: true }),
@@ -61,11 +74,46 @@ export default function POS() {
     } finally {
       setLoading(false)
     }
+  }, [toast])
+
+  const syncDraft = useCallback((patch: Partial<Omit<DraftOrder, 'number'>>) => {
+    setDraftOrders((prev) =>
+      prev.map((draft) =>
+        draft.number === activeDraftNumber ? { ...draft, ...patch } : draft
+      )
+    )
+  }, [activeDraftNumber])
+
+  function activateDraft(draft: DraftOrder) {
+    setActiveDraftNumber(draft.number)
+    setCart(draft.cart)
+    setCartQuantityDrafts({})
+    setDiscount(draft.discount)
+    setPaymentMethod(draft.paymentMethod)
+    setCashReceived(draft.cashReceived)
+  }
+
+  function openDraft(number: number) {
+    const draft = draftOrders.find((item) => item.number === number)
+    if (draft) activateDraft(draft)
+  }
+
+  function createNewOrder() {
+    const draft: DraftOrder = {
+      number: nextDraftNumber,
+      cart: [],
+      discount: 0,
+      paymentMethod: 'cash',
+      cashReceived: 0,
+    }
+    setDraftOrders((prev) => [...prev, draft])
+    setNextDraftNumber((prev) => prev + 1)
+    activateDraft(draft)
   }
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -87,23 +135,24 @@ export default function POS() {
   }
 
   function addProduct(product: Product, quantity = 1) {
-    setCart((prev) => {
-      const existing = prev.find((c) => c.product_id === product.id)
-      if (existing) {
-        return prev.map((c) =>
-          c.product_id === product.id ? { ...c, quantity: c.quantity + quantity } : c
+    const existing = cart.find((line) => line.product_id === product.id)
+    const nextCart = existing
+      ? cart.map((line) =>
+          line.product_id === product.id
+            ? { ...line, quantity: line.quantity + quantity }
+            : line
         )
-      }
-      return [
-        ...prev,
-        {
-          product_id: product.id,
-          product_name: product.name,
-          unit_price: product.selling_price,
-          quantity,
-        },
-      ]
-    })
+      : [
+          ...cart,
+          {
+            product_id: product.id,
+            product_name: product.name,
+            unit_price: product.selling_price,
+            quantity,
+          },
+        ]
+    setCart(nextCart)
+    syncDraft({ cart: nextCart })
   }
 
   function setSelectedQuantity(productId: number, quantity: number) {
@@ -111,14 +160,12 @@ export default function POS() {
   }
 
   function setQty(productId: number, quantity: number) {
-    setCart((prev) => {
-      const next =
-        quantity <= 0
-          ? prev.filter((c) => c.product_id !== productId)
-          : prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
-      syncDraft({ cart: next })
-      return next
-    })
+    const next =
+      quantity <= 0
+        ? cart.filter((line) => line.product_id !== productId)
+        : cart.map((line) => (line.product_id === productId ? { ...line, quantity } : line))
+    setCart(next)
+    syncDraft({ cart: next })
     if (quantity <= 0) {
       setCartQuantityDrafts((prev) => {
         const next = { ...prev }
@@ -134,6 +181,7 @@ export default function POS() {
     setDiscount(0)
     setPaymentMethod('cash')
     setCashReceived(0)
+    syncDraft({ cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 })
   }
 
   async function saveOrder(printAfter: boolean) {
@@ -176,19 +224,20 @@ export default function POS() {
       setDiscount(0)
       setPaymentMethod('cash')
       setCashReceived(0)
+      setCartQuantityDrafts({})
       if (remaining.length > 0) {
         openDraft(remaining[0].number)
       } else {
-        const number = nextDraftNumber
-        setDraftOrders([{
-          number,
+        const draft: DraftOrder = {
+          number: nextDraftNumber,
           cart: [],
           discount: 0,
           paymentMethod: 'cash',
           cashReceived: 0,
-        }])
+        }
+        setDraftOrders([draft])
         setNextDraftNumber((prev) => prev + 1)
-        setActiveDraftNumber(number)
+        activateDraft(draft)
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save order')
@@ -215,13 +264,21 @@ export default function POS() {
       setCashReceived(grandTotal)
       syncDraft({ cashReceived: grandTotal })
     }
-  }, [grandTotal, paymentMethod])
+  }, [cashReceived, grandTotal, paymentMethod, syncDraft])
 
   useEffect(() => {
     setDraftOrderCount(draftOrders.length)
   }, [draftOrders.length, setDraftOrderCount])
 
   if (loading) return <Loading label="Loading POS..." />
+  if (desktopUnavailable) {
+    return (
+      <EmptyState
+        title="POS requires the desktop app"
+        hint="Open Shafi Tikka in the Electron app to load products and save orders."
+      />
+    )
+  }
 
   return (
     <div>
@@ -398,9 +455,13 @@ export default function POS() {
                 onChange={(e) => {
                   const nextDiscount = Number(e.target.value) || 0
                   setDiscount(nextDiscount)
+                  syncDraft({ discount: nextDiscount })
                   if (paymentMethod === 'cash') {
                     const appliedDiscount = Math.min(Math.max(0, nextDiscount), subtotal)
                     setCashReceived(Math.max(0, subtotal - appliedDiscount))
+                    syncDraft({
+                      cashReceived: Math.max(0, subtotal - appliedDiscount),
+                    })
                   }
                 }}
               />

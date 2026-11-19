@@ -20,7 +20,6 @@ Requires Node.js 20 or 22.
 
 ```sh
 npm install
-npx electron-builder install-app-deps
 npm run dev
 ```
 
