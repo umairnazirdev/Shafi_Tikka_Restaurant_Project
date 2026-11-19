@@ -46,11 +46,6 @@ export default function POS() {
   const [saving, setSaving] = useState(false)
   const [lastOrderId, setLastOrderId] = useState<number | null>(null)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<number, number>>({})
-  const [activeDraftNumber, setActiveDraftNumber] = useState(1)
-  const [nextDraftNumber, setNextDraftNumber] = useState(2)
-  const [draftOrders, setDraftOrders] = useState<DraftOrder[]>([
-    { number: 1, cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 },
-  ])
 
   async function load() {
     setLoading(true)
@@ -94,21 +89,20 @@ export default function POS() {
   function addProduct(product: Product, quantity = 1) {
     setCart((prev) => {
       const existing = prev.find((c) => c.product_id === product.id)
-      const next = existing
-        ? prev.map((c) =>
+      if (existing) {
+        return prev.map((c) =>
           c.product_id === product.id ? { ...c, quantity: c.quantity + quantity } : c
         )
-        : [
-            ...prev,
-            {
-              product_id: product.id,
-              product_name: product.name,
-              unit_price: product.selling_price,
-              quantity,
-            },
-          ]
-      syncDraft({ cart: next })
-      return next
+      }
+      return [
+        ...prev,
+        {
+          product_id: product.id,
+          product_name: product.name,
+          unit_price: product.selling_price,
+          quantity,
+        },
+      ]
     })
   }
 
@@ -140,46 +134,6 @@ export default function POS() {
     setDiscount(0)
     setPaymentMethod('cash')
     setCashReceived(0)
-    syncDraft({ cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 })
-  }
-
-  function syncDraft(patch: Partial<DraftOrder>) {
-    setDraftOrders((prev) =>
-      prev.map((draft) =>
-        draft.number === activeDraftNumber ? { ...draft, ...patch } : draft
-      )
-    )
-  }
-
-  function createNewOrder() {
-    const number = nextDraftNumber
-    const draft: DraftOrder = {
-      number,
-      cart: [],
-      discount: 0,
-      paymentMethod: 'cash',
-      cashReceived: 0,
-    }
-    setDraftOrders((prev) => [...prev, draft])
-    setNextDraftNumber((prev) => prev + 1)
-    setActiveDraftNumber(number)
-    setCart([])
-    setCartQuantityDrafts({})
-    setDiscount(0)
-    setPaymentMethod('cash')
-    setCashReceived(0)
-    setActiveView('orders')
-  }
-
-  function openDraft(number: number) {
-    const draft = draftOrders.find((item) => item.number === number)
-    if (!draft) return
-    setActiveDraftNumber(number)
-    setCart(draft.cart)
-    setCartQuantityDrafts({})
-    setDiscount(draft.discount)
-    setPaymentMethod(draft.paymentMethod)
-    setCashReceived(draft.cashReceived)
   }
 
   async function saveOrder(printAfter: boolean) {
@@ -444,13 +398,10 @@ export default function POS() {
                 onChange={(e) => {
                   const nextDiscount = Number(e.target.value) || 0
                   setDiscount(nextDiscount)
-                  let nextCashReceived = cashReceived
                   if (paymentMethod === 'cash') {
                     const appliedDiscount = Math.min(Math.max(0, nextDiscount), subtotal)
-                    nextCashReceived = Math.max(0, subtotal - appliedDiscount)
-                    setCashReceived(nextCashReceived)
+                    setCashReceived(Math.max(0, subtotal - appliedDiscount))
                   }
-                  syncDraft({ discount: nextDiscount, cashReceived: nextCashReceived })
                 }}
               />
             </label>

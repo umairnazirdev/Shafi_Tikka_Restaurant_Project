@@ -30,6 +30,13 @@ export function ProductQuantitySelector({
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
+      <button
+        type="button"
+        className="btn btn-primary product-add-button"
+        onClick={() => onAdd(Math.max(1, Number.parseInt(draftQuantity, 10) || 1))}
+      >
+        Add
+      </button>
       <div className="product-quantity-selector" aria-label="Selected quantity">
         <button
           type="button"
@@ -56,13 +63,6 @@ export function ProductQuantitySelector({
           +
         </button>
       </div>
-      <button
-        type="button"
-        className="btn btn-primary product-add-button"
-        onClick={() => onAdd(Math.max(1, Number.parseInt(draftQuantity, 10) || 1))}
-      >
-        Add
-      </button>
     </div>
   )
 }
