@@ -1,97 +1,38 @@
-import { useState, type FormEvent } from 'react'
+import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { ToastProvider } from './context/ToastContext'
+import { AppLayout } from './components/layout/AppLayout'
+import Dashboard from './pages/Dashboard'
+import POS from './pages/POS'
+import Products from './pages/Products'
+import Orders from './pages/Orders'
+import Stock from './pages/Stock'
+import Recipes from './pages/Recipes'
+import Purchases from './pages/Purchases'
+import Expenses from './pages/Expenses'
+import Reports from './pages/Reports'
+import Settings from './pages/Settings'
 import './App.css'
 
-function App() {
-  const [barcode, setBarcode] = useState('')
-  const [searchedBarcode, setSearchedBarcode] = useState('')
-  const [product, setProduct] = useState<PosProduct>()
-  const [isSearching, setIsSearching] = useState(false)
-  const [error, setError] = useState('')
-
-  async function findProduct(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-
-    const code = barcode.trim()
-    if (!code) {
-      setError('Barcode enter karein.')
-      setProduct(undefined)
-      setSearchedBarcode('')
-      return
-    }
-
-    setIsSearching(true)
-    setError('')
-    setProduct(undefined)
-    setSearchedBarcode(code)
-
-    try {
-      setProduct(await window.api.findByBarcode(code))
-    } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : 'Product search fail ho gayi.')
-    } finally {
-      setIsSearching(false)
-    }
-  }
-
+export default function App() {
   return (
-    <main className="pos-shell">
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">P</div>
-        <div>
-          <p className="eyebrow">COUNTER 01</p>
-          <h1>POS Desk</h1>
-        </div>
-        <span className="local-badge"><span /> Local database</span>
-      </header>
-
-      <section className="lookup-panel" aria-labelledby="lookup-title">
-        <p className="eyebrow">QUICK LOOKUP</p>
-        <h2 id="lookup-title">Product dhoondein</h2>
-        <p className="intro">Barcode scan karein ya code type karke Enter dabayein.</p>
-
-        <form className="lookup-form" onSubmit={findProduct}>
-          <label htmlFor="barcode">Product barcode</label>
-          <div className="input-row">
-            <input
-              autoFocus
-              id="barcode"
-              inputMode="text"
-              autoComplete="off"
-              placeholder="Misal: 123456"
-              value={barcode}
-              onChange={(event) => setBarcode(event.target.value)}
-            />
-            <button type="submit" disabled={isSearching}>
-              {isSearching ? 'Searching...' : 'Search'}
-            </button>
-          </div>
-        </form>
-
-        <div className="result-area" aria-live="polite">
-          {error && <p className="notice error">{error}</p>}
-          {!error && product && (
-            <article className="product-card">
-              <div>
-                <p className="eyebrow">PRODUCT FOUND</p>
-                <h3>{product.name}</h3>
-                <p className="product-barcode">{product.barcode}</p>
-              </div>
-              <div className="product-meta">
-                <span>Price</span>
-                <strong>{product.price.toFixed(2)}</strong>
-                <span>Stock: {product.stock}</span>
-              </div>
-            </article>
-          )}
-          {!error && searchedBarcode && !isSearching && !product && (
-            <p className="notice">Barcode “{searchedBarcode}” ka product database mein nahi mila.</p>
-          )}
-        </div>
-      </section>
-
-      <footer>Product data is stored on this device.</footer>
-    </main>
+    <ToastProvider>
+      <HashRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="pos" element={<POS />} />
+            <Route path="products" element={<Products />} />
+            <Route path="orders" element={<Orders />} />
+            <Route path="stock" element={<Stock />} />
+            <Route path="recipes" element={<Recipes />} />
+            <Route path="purchases" element={<Purchases />} />
+            <Route path="expenses" element={<Expenses />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </HashRouter>
+    </ToastProvider>
   )
 }
-
-export default App

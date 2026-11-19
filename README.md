@@ -1,10 +1,22 @@
-# POS App
+# Shafi Tikka POS
 
-Electron desktop POS starter using React, TypeScript, and a local SQLite database.
+Simple offline desktop POS and daily business management for **SHAFI TIKKA**.
+
+Built with Electron, React, TypeScript, Vite, and SQLite (`better-sqlite3`).
+
+## Features
+
+- Fast counter POS with product cards, cart, discount, cash/card/other payments
+- Thermal receipt printing (58mm / 80mm)
+- Product & category management with editable PKR prices
+- Raw material stock, purchases, and recipe-based stock deduction
+- Expenses, daily sales report, and daily cash closing
+- Dashboard with real SQLite statistics
+- Database backup & restore
 
 ## Setup
 
-Requires Node.js 20 or 22. Install dependencies and start the desktop app:
+Requires Node.js 20 or 22.
 
 ```sh
 npm install
@@ -12,46 +24,30 @@ npx electron-builder install-app-deps
 npm run dev
 ```
 
-`better-sqlite3` is a native module, so `install-app-deps` rebuilds it for the
-Electron version used by this project. On Windows, install Visual Studio Build
-Tools with **Desktop development with C++** only if a compatible prebuilt
-binary is unavailable.
-
-## Windows installer
-
-Build the x64 Windows NSIS installer with:
+## Build
 
 ```sh
+# Linux AppImage
+npm run build:linux
+
+# Windows NSIS installer (needs Wine when building on Linux)
 npm run build:win
 ```
 
-The installer is written to `release/<version>/`. Building on Linux requires
-Wine with 32-bit support (electron-builder runs a 32-bit resource editor).
-On Ubuntu, enable the i386 architecture if needed and install `wine32:i386`
-alongside `wine64`. If the existing Wine prefix cannot run the required
-executables, use a separate 64-bit prefix without changing the existing one:
+Installers are written to `release/<version>/`.
 
-```sh
-WINEARCH=win64 WINEPREFIX="$HOME/.wine-pos-build" npm run build:win
-```
+## Database
 
-`better-sqlite3` also needs a compatible Windows x64 prebuilt binary for the
-Electron version. If one is unavailable, build on Windows with the C++ build
-tools installed. After cross-building (even if it fails), run
-`npx electron-builder install-app-deps` before returning to Linux development
-if the local native dependency was rebuilt for Windows.
+SQLite file is stored in Electron `userData` (not inside the install folder):
 
-## Database and product lookup
+- Linux: `~/.config/Shafi Tikka/shafi_tikka.db`
+- Windows: `%APPDATA%/Shafi Tikka/shafi_tikka.db`
 
-The database is created at Electron's `userData/pos.db` location when the main
-process starts. The initial schema is defined in
-[`electron/db/connection.ts`](./electron/db/connection.ts).
+On first launch the app creates tables and seeds the Shafi Tikka menu products.
 
-The renderer uses the narrow preload API; it never opens SQLite directly:
+## Profit calculation
 
-```ts
-const product = await window.api.findByBarcode('123456')
-```
-
-The corresponding IPC handler is registered in `electron/main.ts` and exposes
-only the product lookup operation.
+- **COGS** comes from recipe ingredient costs when an order is completed
+- **Gross profit** = sales − COGS
+- **Net profit** = gross profit − expenses
+- Purchases increase stock/cost basis; they are **not** subtracted again as COGS

@@ -22,12 +22,14 @@ dist-ssr
 *.db-*
 *.sqlite
 *.sqlite3
+*.zip
 
 # Tool caches and coverage
 .vite
 .npm
 coverage
 *.tsbuildinfo
+public/products
 
 # Editor directories and files
 .vscode/*

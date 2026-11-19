@@ -2,37 +2,11 @@
 
 declare namespace NodeJS {
   interface ProcessEnv {
-    /**
-     * The built directory structure
-     *
-     * ```tree
-     * ├─┬─┬ dist
-     * │ │ └── index.html
-     * │ │
-     * │ ├─┬ dist-electron
-     * │ │ ├── main.js
-     * │ │ └── preload.js
-     * │
-     * ```
-     */
     APP_ROOT: string
-    /** /dist/ or /public/ */
     VITE_PUBLIC: string
   }
 }
 
-interface PosProduct {
-  id: number
-  uuid: string | null
-  barcode: string | null
-  name: string
-  price: number
-  stock: number
-  synced: number
-}
-
 interface Window {
-  api: {
-    findByBarcode(code: string): Promise<PosProduct | undefined>
-  }
+  api: import('./preload').ShafiApi
 }
