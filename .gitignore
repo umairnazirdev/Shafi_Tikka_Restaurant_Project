@@ -23,6 +23,7 @@ dist-ssr
 *.sqlite
 *.sqlite3
 *.zip
+/.history
 
 # Tool caches and coverage
 .vite
