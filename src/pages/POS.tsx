@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { Plus, Minus, Trash2, Printer, Save, RotateCcw } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
 import { formatMoney } from '../lib/format'
 import { Loading } from '../components/ui/Loading'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ProductThumb } from '../components/ProductThumb'
+import { ProductQuantitySelector } from '../components/ui/ProductQuantitySelector'
 
 type CartLine = {
   product_id: number
@@ -13,22 +15,42 @@ type CartLine = {
   quantity: number
 }
 
+type DraftOrder = {
+  number: number
+  cart: CartLine[]
+  discount: number
+  paymentMethod: 'cash' | 'card' | 'other'
+  cashReceived: number
+}
+
+type PosOutletContext = {
+  posView: 'menu' | 'orders'
+  setPosView: (view: 'menu' | 'orders') => void
+  setDraftOrderCount: (count: number) => void
+}
+
 export default function POS() {
   const toast = useToast()
+  const { posView: activeView, setPosView: setActiveView, setDraftOrderCount } =
+    useOutletContext<PosOutletContext>()
   const [loading, setLoading] = useState(true)
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartLine[]>([])
-  const [customerName, setCustomerName] = useState('')
-  const [customerPhone, setCustomerPhone] = useState('')
-  const [notes, setNotes] = useState('')
+  const [cartQuantityDrafts, setCartQuantityDrafts] = useState<Record<number, string>>({})
   const [discount, setDiscount] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'other'>('cash')
   const [cashReceived, setCashReceived] = useState(0)
   const [saving, setSaving] = useState(false)
   const [lastOrderId, setLastOrderId] = useState<number | null>(null)
+  const [selectedQuantities, setSelectedQuantities] = useState<Record<number, number>>({})
+  const [activeDraftNumber, setActiveDraftNumber] = useState(1)
+  const [nextDraftNumber, setNextDraftNumber] = useState(2)
+  const [draftOrders, setDraftOrders] = useState<DraftOrder[]>([
+    { number: 1, cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 },
+  ])
 
   async function load() {
     setLoading(true)
@@ -64,49 +86,100 @@ export default function POS() {
   )
   const safeDiscount = Math.min(Math.max(0, Number(discount) || 0), subtotal)
   const grandTotal = Math.max(0, subtotal - safeDiscount)
-  const changeAmount =
-    paymentMethod === 'cash' ? Math.max(0, (Number(cashReceived) || 0) - grandTotal) : 0
 
   function qtyInCart(productId: number) {
     return cart.find((c) => c.product_id === productId)?.quantity || 0
   }
 
-  function addProduct(product: Product) {
+  function addProduct(product: Product, quantity = 1) {
     setCart((prev) => {
       const existing = prev.find((c) => c.product_id === product.id)
-      if (existing) {
-        return prev.map((c) =>
-          c.product_id === product.id ? { ...c, quantity: c.quantity + 1 } : c
+      const next = existing
+        ? prev.map((c) =>
+          c.product_id === product.id ? { ...c, quantity: c.quantity + quantity } : c
         )
-      }
-      return [
-        ...prev,
-        {
-          product_id: product.id,
-          product_name: product.name,
-          unit_price: product.selling_price,
-          quantity: 1,
-        },
-      ]
+        : [
+            ...prev,
+            {
+              product_id: product.id,
+              product_name: product.name,
+              unit_price: product.selling_price,
+              quantity,
+            },
+          ]
+      syncDraft({ cart: next })
+      return next
     })
+  }
+
+  function setSelectedQuantity(productId: number, quantity: number) {
+    setSelectedQuantities((prev) => ({ ...prev, [productId]: Math.max(1, quantity) }))
   }
 
   function setQty(productId: number, quantity: number) {
     setCart((prev) => {
-      if (quantity <= 0) return prev.filter((c) => c.product_id !== productId)
-      return prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
+      const next =
+        quantity <= 0
+          ? prev.filter((c) => c.product_id !== productId)
+          : prev.map((c) => (c.product_id === productId ? { ...c, quantity } : c))
+      syncDraft({ cart: next })
+      return next
     })
+    if (quantity <= 0) {
+      setCartQuantityDrafts((prev) => {
+        const next = { ...prev }
+        delete next[productId]
+        return next
+      })
+    }
   }
 
   function clearCart() {
     setCart([])
-    setCustomerName('')
-    setCustomerPhone('')
-    setNotes('')
+    setCartQuantityDrafts({})
     setDiscount(0)
     setPaymentMethod('cash')
     setCashReceived(0)
-    setLastOrderId(null)
+    syncDraft({ cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 })
+  }
+
+  function syncDraft(patch: Partial<DraftOrder>) {
+    setDraftOrders((prev) =>
+      prev.map((draft) =>
+        draft.number === activeDraftNumber ? { ...draft, ...patch } : draft
+      )
+    )
+  }
+
+  function createNewOrder() {
+    const number = nextDraftNumber
+    const draft: DraftOrder = {
+      number,
+      cart: [],
+      discount: 0,
+      paymentMethod: 'cash',
+      cashReceived: 0,
+    }
+    setDraftOrders((prev) => [...prev, draft])
+    setNextDraftNumber((prev) => prev + 1)
+    setActiveDraftNumber(number)
+    setCart([])
+    setCartQuantityDrafts({})
+    setDiscount(0)
+    setPaymentMethod('cash')
+    setCashReceived(0)
+    setActiveView('orders')
+  }
+
+  function openDraft(number: number) {
+    const draft = draftOrders.find((item) => item.number === number)
+    if (!draft) return
+    setActiveDraftNumber(number)
+    setCart(draft.cart)
+    setCartQuantityDrafts({})
+    setDiscount(draft.discount)
+    setPaymentMethod(draft.paymentMethod)
+    setCashReceived(draft.cashReceived)
   }
 
   async function saveOrder(printAfter: boolean) {
@@ -122,9 +195,9 @@ export default function POS() {
     setSaving(true)
     try {
       const result = await window.api.createOrder({
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        notes,
+        customer_name: '',
+        customer_phone: '',
+        notes: '',
         discount: safeDiscount,
         payment_method: paymentMethod,
         cash_received: paymentMethod === 'cash' ? Number(cashReceived) || grandTotal : 0,
@@ -140,7 +213,29 @@ export default function POS() {
       if (printAfter) {
         await window.api.printReceipt(result.id)
       }
-      clearCart()
+      const remaining = draftOrders
+        .filter((draft) => draft.number !== activeDraftNumber)
+        .sort((a, b) => a.number - b.number)
+      setDraftOrders(remaining)
+      setCart([])
+      setCartQuantityDrafts({})
+      setDiscount(0)
+      setPaymentMethod('cash')
+      setCashReceived(0)
+      if (remaining.length > 0) {
+        openDraft(remaining[0].number)
+      } else {
+        const number = nextDraftNumber
+        setDraftOrders([{
+          number,
+          cart: [],
+          discount: 0,
+          paymentMethod: 'cash',
+          cashReceived: 0,
+        }])
+        setNextDraftNumber((prev) => prev + 1)
+        setActiveDraftNumber(number)
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save order')
     } finally {
@@ -150,11 +245,12 @@ export default function POS() {
 
   async function reprintLast() {
     if (!lastOrderId) {
-      toast.info('No recent order to print')
+      toast.info('Save an order before printing an invoice')
       return
     }
     try {
-      await window.api.printReceipt(lastOrderId)
+      await window.api.printInvoice(lastOrderId)
+      toast.success('Invoice preview opened')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Print failed')
     }
@@ -163,15 +259,23 @@ export default function POS() {
   useEffect(() => {
     if (paymentMethod === 'cash' && cashReceived < grandTotal) {
       setCashReceived(grandTotal)
+      syncDraft({ cashReceived: grandTotal })
     }
   }, [grandTotal, paymentMethod])
+
+  useEffect(() => {
+    setDraftOrderCount(draftOrders.length)
+  }, [draftOrders.length, setDraftOrderCount])
 
   if (loading) return <Loading label="Loading POS..." />
 
   return (
-    <div className="pos-layout">
-      <section className="pos-products">
-        <div className="toolbar">
+    <div>
+      <div className="pos-layout">
+        <section className="pos-products">
+          {activeView === 'menu' ? (
+            <>
+              <div className="toolbar">
           <input
             placeholder="Search products..."
             value={search}
@@ -181,8 +285,8 @@ export default function POS() {
           <button type="button" className="btn btn-ghost" onClick={() => void load()}>
             Refresh
           </button>
-        </div>
-        <div className="chip-row">
+              </div>
+              <div className="chip-row">
           <button
             type="button"
             className={`chip ${categoryId === 'all' ? 'active' : ''}`}
@@ -200,35 +304,79 @@ export default function POS() {
               {c.name}
             </button>
           ))}
-        </div>
-        {filtered.length === 0 ? (
-          <EmptyState title="No products found" hint="Add products from the Products page." />
-        ) : (
-          <div className="product-grid">
+              </div>
+              {filtered.length === 0 ? (
+                <EmptyState title="No products found" hint="Add products from the Products page." />
+              ) : (
+                <div className="product-grid">
             {filtered.map((p) => {
               const qty = qtyInCart(p.id)
+              const selectedQuantity = selectedQuantities[p.id] ?? 1
               return (
-                <button key={p.id} type="button" className="product-tile" onClick={() => addProduct(p)}>
+                <div
+                  key={p.id}
+                  className="product-tile"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => addProduct(p)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      addProduct(p)
+                    }
+                  }}
+                >
                   {qty > 0 && <span className="qty-badge">{qty}</span>}
                   <ProductThumb name={p.name} imagePath={p.image_path} />
                   <strong>{p.name}</strong>
                   <div className="price">{formatMoney(p.selling_price)}</div>
-                  <span className="btn btn-primary" style={{ padding: '6px 8px', fontSize: 12 }}>
-                    <Plus size={14} /> Add
-                  </span>
-                </button>
+                  <ProductQuantitySelector
+                    quantity={selectedQuantity}
+                    onQuantityChange={(quantity) => setSelectedQuantity(p.id, quantity)}
+                    onAdd={(quantity) => {
+                      addProduct(p, quantity)
+                      setSelectedQuantity(p.id, 1)
+                    }}
+                  />
+                </div>
               )
             })}
-          </div>
-        )}
-      </section>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="pos-order-browser">
+              <h2>Current Orders</h2>
+              <p>First come, first served</p>
+              <div className="pos-order-list">
+                {[...draftOrders].sort((a, b) => a.number - b.number).map((draft) => (
+                  <button
+                    key={draft.number}
+                    type="button"
+                    className={`pos-order-card ${draft.number === activeDraftNumber ? 'active' : ''}`}
+                    onClick={() => openDraft(draft.number)}
+                  >
+                    <span className="pos-order-number">#{draft.number}</span>
+                    <strong>{draft.cart.length ? `${draft.cart.length} item(s)` : 'New order'}</strong>
+                    <span>{formatMoney(draft.cart.reduce((sum, item) => sum + item.quantity * item.unit_price, 0) - draft.discount)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
 
       <aside className="cart-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>Current Order</h2>
-          <button type="button" className="btn btn-ghost" onClick={clearCart} title="New Order">
-            <RotateCcw size={16} /> New
-          </button>
+          <h2>Order #{activeDraftNumber}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button type="button" className="btn pos-new-button" onClick={createNewOrder}>
+              <Plus size={14} /> New
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={clearCart} title="Clear current order">
+              <RotateCcw size={16} /> Clear
+            </button>
+          </div>
         </div>
 
         <div className="cart-list">
@@ -246,7 +394,34 @@ export default function POS() {
                 <button type="button" onClick={() => setQty(item.product_id, item.quantity - 1)}>
                   <Minus size={14} />
                 </button>
-                <strong>{item.quantity}</strong>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={cartQuantityDrafts[item.product_id] ?? String(item.quantity)}
+                  aria-label={`Quantity for ${item.product_name}`}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setCartQuantityDrafts((prev) => ({ ...prev, [item.product_id]: value }))
+                    const quantity = Number(value)
+                    if (Number.isInteger(quantity) && quantity >= 1) {
+                      setQty(item.product_id, quantity)
+                    }
+                  }}
+                  onBlur={() => {
+                    const draft = cartQuantityDrafts[item.product_id]
+                    const quantity = draft === undefined ? item.quantity : Number(draft)
+                    setQty(
+                      item.product_id,
+                      Number.isInteger(quantity) && quantity >= 1 ? quantity : Math.max(1, item.quantity)
+                    )
+                    setCartQuantityDrafts((prev) => {
+                      const next = { ...prev }
+                      delete next[item.product_id]
+                      return next
+                    })
+                  }}
+                />
                 <button type="button" onClick={() => setQty(item.product_id, item.quantity + 1)}>
                   <Plus size={14} />
                 </button>
@@ -259,18 +434,6 @@ export default function POS() {
         </div>
 
         <div className="cart-fields">
-          <label>
-            Customer name
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Optional" />
-          </label>
-          <label>
-            Phone
-            <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Optional" />
-          </label>
-          <label>
-            Notes
-            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
-          </label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label>
               Discount
@@ -278,14 +441,28 @@ export default function POS() {
                 type="number"
                 min={0}
                 value={discount}
-                onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                onChange={(e) => {
+                  const nextDiscount = Number(e.target.value) || 0
+                  setDiscount(nextDiscount)
+                  let nextCashReceived = cashReceived
+                  if (paymentMethod === 'cash') {
+                    const appliedDiscount = Math.min(Math.max(0, nextDiscount), subtotal)
+                    nextCashReceived = Math.max(0, subtotal - appliedDiscount)
+                    setCashReceived(nextCashReceived)
+                  }
+                  syncDraft({ discount: nextDiscount, cashReceived: nextCashReceived })
+                }}
               />
             </label>
             <label>
               Payment
               <select
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as 'cash' | 'card' | 'other')}
+                onChange={(e) => {
+                  const nextPayment = e.target.value as 'cash' | 'card' | 'other'
+                  setPaymentMethod(nextPayment)
+                  syncDraft({ paymentMethod: nextPayment })
+                }}
               >
                 <option value="cash">Cash</option>
                 <option value="card">Card</option>
@@ -300,7 +477,11 @@ export default function POS() {
                 type="number"
                 min={0}
                 value={cashReceived}
-                onChange={(e) => setCashReceived(Number(e.target.value) || 0)}
+                onChange={(e) => {
+                  const nextCashReceived = Number(e.target.value) || 0
+                  setCashReceived(nextCashReceived)
+                  syncDraft({ cashReceived: nextCashReceived })
+                }}
               />
             </label>
           )}
@@ -319,12 +500,6 @@ export default function POS() {
             <span>Grand Total</span>
             <span>{formatMoney(grandTotal)}</span>
           </div>
-          {paymentMethod === 'cash' && (
-            <div>
-              <span>Change</span>
-              <span>{formatMoney(changeAmount)}</span>
-            </div>
-          )}
         </div>
 
         <div className="cart-actions">
@@ -352,6 +527,7 @@ export default function POS() {
           </button>
         </div>
       </aside>
+      </div>
     </div>
   )
 }

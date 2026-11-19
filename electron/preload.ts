@@ -13,6 +13,9 @@ const api = {
   updateCategory: (id: number, name: string) => ipcRenderer.invoke('categories:update', id, name),
   deleteCategory: (id: number) => ipcRenderer.invoke('categories:delete', id),
 
+  listWaiters: () => ipcRenderer.invoke('waiters:list'),
+  createWaiter: (name: string) => ipcRenderer.invoke('waiters:create', name),
+
   listProducts: (filters?: unknown) => ipcRenderer.invoke('products:list', filters),
   createProduct: (data: unknown) => ipcRenderer.invoke('products:create', data),
   updateProduct: (id: number, data: unknown) => ipcRenderer.invoke('products:update', id, data),
@@ -23,6 +26,7 @@ const api = {
   getOrder: (id: number) => ipcRenderer.invoke('orders:get', id),
   cancelOrder: (id: number) => ipcRenderer.invoke('orders:cancel', id),
   printReceipt: (orderId: number) => ipcRenderer.invoke('orders:printReceipt', orderId),
+  printInvoice: (orderId: number) => ipcRenderer.invoke('orders:printInvoice', orderId),
 
   getDashboardStats: () => ipcRenderer.invoke('dashboard:stats'),
   getDailyReport: (date?: string) => ipcRenderer.invoke('reports:daily', date),

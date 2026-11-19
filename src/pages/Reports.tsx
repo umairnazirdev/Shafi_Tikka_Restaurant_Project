@@ -91,9 +91,7 @@ export default function Reports() {
       { Metric: 'Other sales', Value: summary.otherSales },
       { Metric: 'Discounts', Value: summary.totalDiscounts },
       { Metric: 'Cancelled orders', Value: summary.cancelledOrders },
-      { Metric: 'Purchases', Value: summary.totalPurchases },
       { Metric: 'Expenses', Value: summary.totalExpenses },
-      { Metric: 'COGS', Value: summary.cogs },
       { Metric: 'Gross profit', Value: summary.grossProfit },
       { Metric: 'Net profit', Value: summary.netProfit },
     ]
@@ -120,9 +118,7 @@ export default function Reports() {
       ['Cash / Card / Other', `${formatMoney(summary.cashSales)} / ${formatMoney(summary.cardSales)} / ${formatMoney(summary.otherSales)}`],
       ['Discounts', formatMoney(summary.totalDiscounts)],
       ['Cancelled', summary.cancelledOrders],
-      ['Purchases', formatMoney(summary.totalPurchases)],
       ['Expenses', formatMoney(summary.totalExpenses)],
-      ['COGS', formatMoney(summary.cogs)],
       ['Gross profit', formatMoney(summary.grossProfit)],
       ['Net profit', formatMoney(summary.netProfit)],
       ['—', '—'],
@@ -145,9 +141,7 @@ export default function Reports() {
         { label: 'Other sales', value: formatMoney(summary.otherSales) },
         { label: 'Discounts', value: formatMoney(summary.totalDiscounts) },
         { label: 'Cancelled', value: String(summary.cancelledOrders) },
-        { label: 'Purchases', value: formatMoney(summary.totalPurchases) },
         { label: 'Expenses', value: formatMoney(summary.totalExpenses) },
-        { label: 'COGS', value: formatMoney(summary.cogs) },
         { label: 'Gross profit', value: formatMoney(summary.grossProfit) },
         { label: 'Net profit', value: formatMoney(summary.netProfit) },
       ]
@@ -183,14 +177,6 @@ export default function Reports() {
         >
           Load day
         </button>
-      </div>
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.5 }}>
-          Profit note: <strong>gross</strong> = sales − COGS (recipe material costs on completed
-          orders); <strong>net</strong> = gross − expenses. Purchases increase stock and are not
-          double-counted in profit (COGS already reflects recipe usage).
-        </p>
       </div>
 
       {summary && (

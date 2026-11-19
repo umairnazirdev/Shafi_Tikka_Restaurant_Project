@@ -5,9 +5,7 @@ import Dashboard from './pages/Dashboard'
 import POS from './pages/POS'
 import Products from './pages/Products'
 import Orders from './pages/Orders'
-import Stock from './pages/Stock'
-import Recipes from './pages/Recipes'
-import Purchases from './pages/Purchases'
+import Waiters from './pages/Waiters'
 import Expenses from './pages/Expenses'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
@@ -23,9 +21,7 @@ export default function App() {
             <Route path="pos" element={<POS />} />
             <Route path="products" element={<Products />} />
             <Route path="orders" element={<Orders />} />
-            <Route path="stock" element={<Stock />} />
-            <Route path="recipes" element={<Recipes />} />
-            <Route path="purchases" element={<Purchases />} />
+            <Route path="waiters" element={<Waiters />} />
             <Route path="expenses" element={<Expenses />} />
             <Route path="reports" element={<Reports />} />
             <Route path="settings" element={<Settings />} />

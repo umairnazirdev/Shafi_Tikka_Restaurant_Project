@@ -16,7 +16,7 @@ import { PageHeader } from '../components/layout/PageHeader'
 import { Loading } from '../components/ui/Loading'
 import { EmptyState } from '../components/ui/EmptyState'
 import { useToast } from '../context/ToastContext'
-import { formatMoney, formatDateTime, formatQty } from '../lib/format'
+import { formatMoney, formatDateTime } from '../lib/format'
 
 export default function Dashboard() {
   const toast = useToast()
@@ -44,12 +44,9 @@ export default function Dashboard() {
   const cards = [
     { label: "Today's Sales", value: formatMoney(stats.totalSales) },
     { label: 'Orders', value: String(stats.totalOrders) },
-    { label: 'Purchases', value: formatMoney(stats.totalPurchases) },
     { label: 'Expenses', value: formatMoney(stats.totalExpenses) },
     { label: 'Gross Profit', value: formatMoney(stats.grossProfit) },
     { label: 'Net Profit', value: formatMoney(stats.netProfit) },
-    { label: 'Materials', value: String(stats.materialCount) },
-    { label: 'Low Stock', value: String(stats.lowStockCount) },
   ]
 
   return (
@@ -126,29 +123,6 @@ export default function Dashboard() {
       </div>
 
       <div className="dashboard-grid">
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Low stock</h3>
-          {stats.lowStock.length === 0 ? (
-            <EmptyState title="Stock looks healthy" hint="No materials at or below minimum." />
-          ) : (
-            <div className="low-stock-list">
-              {stats.lowStock.map((m) => (
-                <div key={m.id} className="list-row">
-                  <div>
-                    <strong>{m.name}</strong>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      Min {formatQty(m.min_stock)} {m.unit}
-                    </div>
-                  </div>
-                  <span className="badge badge-danger">
-                    {formatQty(m.current_stock)} {m.unit}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Recent transactions</h3>
           {stats.recentTransactions.length === 0 ? (
