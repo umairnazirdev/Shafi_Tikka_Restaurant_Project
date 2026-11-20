@@ -15,10 +15,13 @@ const api = {
 
   listWaiters: () => ipcRenderer.invoke('waiters:list'),
   createWaiter: (name: string) => ipcRenderer.invoke('waiters:create', name),
+  deleteWaiter: (id: number) => ipcRenderer.invoke('waiters:delete', id),
 
   listProducts: (filters?: unknown) => ipcRenderer.invoke('products:list', filters),
   createProduct: (data: unknown) => ipcRenderer.invoke('products:create', data),
   updateProduct: (id: number, data: unknown) => ipcRenderer.invoke('products:update', id, data),
+  addProductQuantity: (id: number, quantity: number) =>
+    ipcRenderer.invoke('products:addQuantity', id, quantity),
   deleteProduct: (id: number) => ipcRenderer.invoke('products:delete', id),
 
   createOrder: (data: unknown) => ipcRenderer.invoke('orders:create', data),

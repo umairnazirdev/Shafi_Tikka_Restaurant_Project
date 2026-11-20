@@ -180,6 +180,13 @@ export function registerAllHandlers(db: Database.Database): void {
     return { id: Number(result.lastInsertRowid) }
   })
 
+  ipcMain.handle('waiters:delete', (_e, id: number) => {
+    if (!Number.isInteger(id) || id <= 0) throw new Error('Valid waiter required')
+    const result = db.prepare(`DELETE FROM waiters WHERE id=?`).run(id)
+    if (result.changes === 0) throw new Error('Waiter not found')
+    return { success: true }
+  })
+
   // ── Products ──
   ipcMain.handle('products:list', (_e, filters?: { search?: string; available_only?: boolean; category_id?: number }) => {
     let sql = `SELECT p.*, c.name as category_name FROM products p
@@ -207,22 +214,27 @@ export function registerAllHandlers(db: Database.Database): void {
         category_id?: number | null
         selling_price: number
         purchase_cost?: number
+        quantity?: number
         image_path?: string | null
         is_available?: number
       }
     ) => {
       if (!data.name?.trim()) throw new Error('Product name required')
       if (data.selling_price < 0) throw new Error('Price cannot be negative')
+      if (data.quantity !== undefined && (!Number.isInteger(data.quantity) || data.quantity < 0)) {
+        throw new Error('Quantity cannot be negative')
+      }
       const r = db
         .prepare(
-          `INSERT INTO products (name, category_id, selling_price, purchase_cost, image_path, is_available)
-           VALUES (?, ?, ?, ?, ?, ?)`
+          `INSERT INTO products (name, category_id, selling_price, purchase_cost, quantity, image_path, is_available)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           data.name.trim(),
           data.category_id ?? null,
           data.selling_price,
           data.purchase_cost ?? 0,
+          data.quantity ?? 0,
           data.image_path ?? null,
           data.is_available ?? 1
         )
@@ -240,6 +252,7 @@ export function registerAllHandlers(db: Database.Database): void {
         category_id?: number | null
         selling_price?: number
         purchase_cost?: number
+        quantity?: number
         image_path?: string | null
         is_available?: number
         sort_order?: number
@@ -247,9 +260,12 @@ export function registerAllHandlers(db: Database.Database): void {
     ) => {
       const existing = db.prepare(`SELECT * FROM products WHERE id=?`).get(id) as Record<string, unknown> | undefined
       if (!existing) throw new Error('Product not found')
+      if (data.quantity !== undefined && (!Number.isInteger(data.quantity) || data.quantity < 0)) {
+        throw new Error('Quantity must be a non-negative whole number')
+      }
       db.prepare(
         `UPDATE products SET
-          name=?, category_id=?, selling_price=?, purchase_cost=?, image_path=?,
+          name=?, category_id=?, selling_price=?, purchase_cost=?, quantity=?, image_path=?,
           is_available=?, sort_order=?, updated_at=datetime('now','localtime')
          WHERE id=?`
       ).run(
@@ -257,6 +273,7 @@ export function registerAllHandlers(db: Database.Database): void {
         data.category_id !== undefined ? data.category_id : existing.category_id,
         data.selling_price ?? existing.selling_price,
         data.purchase_cost ?? existing.purchase_cost,
+        data.quantity ?? existing.quantity,
         data.image_path !== undefined ? data.image_path : existing.image_path,
         data.is_available ?? existing.is_available,
         data.sort_order ?? existing.sort_order,
@@ -265,6 +282,30 @@ export function registerAllHandlers(db: Database.Database): void {
       return { success: true }
     }
   )
+
+  ipcMain.handle('products:addQuantity', (_e, id: number, quantity: number) => {
+    if (!Number.isInteger(id) || id <= 0) throw new Error('Valid product required')
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new Error('Quantity to add must be a positive whole number')
+    }
+
+    const addQuantity = db.transaction(() => {
+      const product = db.prepare(`SELECT quantity FROM products WHERE id=?`).get(id) as
+        | { quantity: number }
+        | undefined
+      if (!product) throw new Error('Product not found')
+      const newQuantity = Number(product.quantity) + quantity
+      if (!Number.isSafeInteger(newQuantity)) throw new Error('Product quantity is too large')
+
+      db.prepare(
+        `UPDATE products
+         SET quantity=quantity+?, updated_at=datetime('now','localtime')
+         WHERE id=?`
+      ).run(quantity, id)
+      return { quantity: newQuantity }
+    })
+    return addQuantity()
+  })
 
   ipcMain.handle('products:delete', (_e, id: number) => {
     const used = db.prepare(`SELECT COUNT(*) as c FROM order_items WHERE product_id=?`).get(id) as {
@@ -287,6 +328,7 @@ export function registerAllHandlers(db: Database.Database): void {
         customer_name?: string
         customer_phone?: string
         notes?: string
+        waiter_id?: number | null
         discount?: number
         payment_method: 'cash' | 'card' | 'other'
         cash_received?: number
@@ -319,16 +361,17 @@ export function registerAllHandlers(db: Database.Database): void {
         const r = db
           .prepare(
             `INSERT INTO orders (
-              order_number, customer_name, customer_phone, notes,
+              order_number, customer_name, customer_phone, notes, waiter_id,
               subtotal, discount, grand_total, payment_method,
               cash_received, change_amount, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?)`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?)`
           )
           .run(
             orderNumber,
             data.customer_name?.trim() || null,
             data.customer_phone?.trim() || null,
             data.notes?.trim() || null,
+            data.waiter_id ?? null,
             subtotal,
             discount,
             grandTotal,
@@ -340,13 +383,21 @@ export function registerAllHandlers(db: Database.Database): void {
         const orderId = Number(r.lastInsertRowid)
 
         const itemStmt = db.prepare(
-          `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, line_total, unit_cost)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, line_total, unit_cost, stock_deducted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         for (const item of data.items) {
+          if (!Number.isFinite(item.quantity) || item.quantity < 1) {
+            throw new Error(`Invalid quantity for ${item.product_name}`)
+          }
           const product = db
-            .prepare(`SELECT purchase_cost FROM products WHERE id=?`)
-            .get(item.product_id) as { purchase_cost: number } | undefined
+            .prepare(`SELECT purchase_cost, quantity, is_available FROM products WHERE id=?`)
+            .get(item.product_id) as { purchase_cost: number; quantity: number; is_available: number } | undefined
+          if (!product) throw new Error(`Product not found: ${item.product_name}`)
+          const manageQuantity = product.is_available === 1
+          if (manageQuantity && product.quantity < item.quantity) {
+            throw new Error(`Insufficient quantity for ${item.product_name}. Available: ${product.quantity}`)
+          }
           itemStmt.run(
             orderId,
             item.product_id,
@@ -354,8 +405,16 @@ export function registerAllHandlers(db: Database.Database): void {
             item.quantity,
             item.unit_price,
             roundMoney(item.quantity * item.unit_price),
-            product?.purchase_cost ?? 0
+            product.purchase_cost ?? 0,
+            manageQuantity ? 1 : 0
           )
+          if (manageQuantity) {
+            db.prepare(
+              `UPDATE products
+               SET quantity = quantity - ?, updated_at=datetime('now','localtime')
+               WHERE id=?`
+            ).run(item.quantity, item.product_id)
+          }
         }
 
         db.prepare(
@@ -410,7 +469,14 @@ export function registerAllHandlers(db: Database.Database): void {
   })
 
   ipcMain.handle('orders:get', (_e, id: number) => {
-    const order = db.prepare(`SELECT * FROM orders WHERE id=?`).get(id)
+    const order = db
+      .prepare(
+        `SELECT orders.*, waiters.name AS waiter_name
+         FROM orders
+         LEFT JOIN waiters ON waiters.id=orders.waiter_id
+         WHERE orders.id=?`
+      )
+      .get(id)
     if (!order) throw new Error('Order not found')
     const items = db.prepare(`SELECT * FROM order_items WHERE order_id=?`).all(id)
     const payments = db.prepare(`SELECT * FROM payments WHERE order_id=?`).all(id)
@@ -428,6 +494,17 @@ export function registerAllHandlers(db: Database.Database): void {
       db.prepare(
         `UPDATE orders SET status='cancelled', cancelled_at=datetime('now','localtime') WHERE id=?`
       ).run(id)
+      const items = db.prepare(
+        `SELECT product_id, quantity FROM order_items
+         WHERE order_id=? AND product_id IS NOT NULL AND stock_deducted=1`
+      ).all(id) as Array<{ product_id: number; quantity: number }>
+      for (const item of items) {
+        db.prepare(
+          `UPDATE products
+           SET quantity = quantity + ?, updated_at=datetime('now','localtime')
+           WHERE id=?`
+        ).run(item.quantity, item.product_id)
+      }
       return { success: true }
     })
     return run()
@@ -699,7 +776,32 @@ export function registerAllHandlers(db: Database.Database): void {
         `SELECT * FROM orders WHERE date(created_at)=? ORDER BY id DESC`
       )
       .all(d)
-    return { summary, orders }
+    const products = db
+      .prepare(
+        `SELECT
+           oi.product_name,
+           COALESCE(SUM(oi.quantity), 0) as quantity_sold,
+           COALESCE(SUM(oi.line_total), 0) as gross_sales,
+           COALESCE(SUM(
+             CASE WHEN o.subtotal > 0
+               THEN oi.line_total * o.discount / o.subtotal
+               ELSE 0
+             END
+           ), 0) as discount_allocated,
+           COALESCE(SUM(
+             CASE WHEN o.subtotal > 0
+               THEN oi.line_total * o.grand_total / o.subtotal
+               ELSE 0
+             END
+           ), 0) as net_sales
+         FROM order_items oi
+         JOIN orders o ON o.id=oi.order_id
+         WHERE o.status='completed' AND date(o.created_at)=?
+         GROUP BY oi.product_name
+         ORDER BY quantity_sold DESC, oi.product_name COLLATE NOCASE`
+      )
+      .all(d)
+    return { summary, orders, products }
   })
 
   // ── Raw materials ──

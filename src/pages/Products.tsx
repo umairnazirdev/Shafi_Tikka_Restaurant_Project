@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Pencil, Trash2, ImagePlus } from 'lucide-react'
+import { Plus, Pencil, Trash2, ImagePlus, Check, X } from 'lucide-react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Modal } from '../components/ui/Modal'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
@@ -12,7 +12,7 @@ type ProductForm = {
   name: string
   category_id: number | ''
   selling_price: string
-  purchase_cost: string
+  quantity: string
   image_path: string | null
   is_available: boolean
 }
@@ -21,7 +21,7 @@ const emptyForm = (): ProductForm => ({
   name: '',
   category_id: '',
   selling_price: '',
-  purchase_cost: '0',
+  quantity: '0',
   image_path: null,
   is_available: true,
 })
@@ -39,6 +39,8 @@ export default function Products() {
   const [saving, setSaving] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null)
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<number, string>>({})
+  const [updatingQuantityId, setUpdatingQuantityId] = useState<number | null>(null)
 
   async function load() {
     setLoading(true)
@@ -80,7 +82,7 @@ export default function Products() {
       name: p.name,
       category_id: p.category_id ?? '',
       selling_price: String(p.selling_price),
-      purchase_cost: String(p.purchase_cost ?? 0),
+      quantity: String(p.quantity ?? 0),
       image_path: p.image_path,
       is_available: !!p.is_available,
     })
@@ -121,13 +123,18 @@ export default function Products() {
       toast.error('Valid selling price required')
       return
     }
+    const quantity = Number(form.quantity)
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      toast.error('Valid quantity required')
+      return
+    }
     setSaving(true)
     try {
       const payload = {
         name: form.name.trim(),
         category_id: form.category_id === '' ? null : Number(form.category_id),
         selling_price: selling,
-        purchase_cost: Number(form.purchase_cost) || 0,
+        quantity,
         image_path: form.image_path,
         is_available: form.is_available ? 1 : 0,
       }
@@ -156,6 +163,62 @@ export default function Products() {
       await load()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
+
+  async function setProductAvailability(product: Product, isAvailable: boolean) {
+    try {
+      await window.api.updateProduct(product.id, {
+        name: product.name,
+        category_id: product.category_id,
+        selling_price: product.selling_price,
+        purchase_cost: product.purchase_cost,
+        quantity: product.quantity,
+        image_path: product.image_path,
+        is_available: isAvailable ? 1 : 0,
+        sort_order: product.sort_order,
+      })
+      setProducts((current) =>
+        current.map((item) =>
+          item.id === product.id ? { ...item, is_available: isAvailable ? 1 : 0 } : item
+        )
+      )
+      toast.success(isAvailable ? 'Quantity tracking enabled' : 'Quantity tracking disabled')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not update availability')
+    }
+  }
+
+  async function setProductQuantity(product: Product) {
+    const rawQuantity = quantityDrafts[product.id]
+    if (rawQuantity === undefined || rawQuantity.trim() === '') {
+      toast.error('Enter a quantity to add')
+      return
+    }
+    const quantity = Number(rawQuantity)
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      toast.error('Enter a positive whole-number quantity')
+      return
+    }
+
+    setUpdatingQuantityId(product.id)
+    try {
+      const result = await window.api.addProductQuantity(product.id, quantity)
+      setProducts((current) =>
+        current.map((item) =>
+          item.id === product.id ? { ...item, quantity: result.quantity } : item
+        )
+      )
+      setQuantityDrafts((current) => {
+        const next = { ...current }
+        delete next[product.id]
+        return next
+      })
+      toast.success(`${quantity} added to ${product.name}. New quantity: ${result.quantity}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update quantity')
+    } finally {
+      setUpdatingQuantityId(null)
     }
   }
 
@@ -206,8 +269,8 @@ export default function Products() {
                 <th>Name</th>
                 <th>Category</th>
                 <th>Selling price</th>
-                <th>Purchase cost</th>
-                <th>Available</th>
+                <th>Quantity</th>
+                <th>Manage Stock</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -219,16 +282,58 @@ export default function Products() {
                   </td>
                   <td>{p.category_name || '—'}</td>
                   <td>{formatMoney(p.selling_price)}</td>
-                  <td>{formatMoney(p.purchase_cost)}</td>
+                  <td>{p.quantity ?? 0}</td>
                   <td>
-                    <span className={`badge ${p.is_available ? 'badge-ok' : 'badge-muted'}`}>
-                      {p.is_available ? 'Yes' : 'No'}
-                    </span>
+                    <div className="manage-product-toggle" role="group" aria-label={`Manage ${p.name}`}>
+                      <button
+                        type="button"
+                        className={`manage-product-button yes ${p.is_available ? 'active' : ''}`}
+                        onClick={() => void setProductAvailability(p, true)}
+                        aria-pressed={!!p.is_available}
+                        title="Track product quantity"
+                      >
+                        <Check size={14} /> Yes
+                      </button>
+                      <button
+                        type="button"
+                        className={`manage-product-button no ${!p.is_available ? 'active' : ''}`}
+                        onClick={() => void setProductAvailability(p, false)}
+                        aria-pressed={!p.is_available}
+                        title="Ignore product quantity"
+                      >
+                        <X size={14} /> No
+                      </button>
+                    </div>
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div className="product-actions">
                       <button type="button" className="btn btn-ghost" onClick={() => openEdit(p)}>
                         <Pencil size={14} /> Edit
+                      </button>
+                      <input
+                        className="product-quantity-quick-input"
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder="Add qty"
+                        aria-label={`Add stock quantity for ${p.name}`}
+                        value={quantityDrafts[p.id] ?? ''}
+                        onChange={(event) =>
+                          setQuantityDrafts((current) => ({
+                            ...current,
+                            [p.id]: event.target.value,
+                          }))
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary product-quantity-quick-save"
+                        aria-label={`Add quantity for ${p.name}`}
+                        title="Add quantity"
+                        disabled={updatingQuantityId === p.id}
+                        onClick={() => void setProductQuantity(p)}
+                      >
+                        <Plus size={14} />
                       </button>
                       <button
                         type="button"
@@ -316,12 +421,13 @@ export default function Products() {
               />
             </label>
             <label className="field">
-              Purchase cost
+              Quantity
               <input
                 type="number"
                 min={0}
-                value={form.purchase_cost}
-                onChange={(e) => setForm((f) => ({ ...f, purchase_cost: e.target.value }))}
+                step={1}
+                value={form.quantity}
+                onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))}
               />
             </label>
             <div className="field full">
@@ -346,14 +452,6 @@ export default function Products() {
                 )}
               </div>
             </div>
-            <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <input
-                type="checkbox"
-                checked={form.is_available}
-                onChange={(e) => setForm((f) => ({ ...f, is_available: e.target.checked }))}
-              />
-              Available on POS
-            </label>
           </div>
         </Modal>
       )}

@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileSpreadsheet, FileText, Save } from 'lucide-react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Loading } from '../components/ui/Loading'
 import { EmptyState } from '../components/ui/EmptyState'
 import { useToast } from '../context/ToastContext'
-import { formatMoney, formatDate, formatDateTime, todayISO } from '../lib/format'
+import { formatMoney, formatQty, formatDate, formatDateTime, todayISO } from '../lib/format'
 import { exportToExcel, exportToPdf } from '../lib/export'
 
 export default function Reports() {
@@ -13,43 +13,58 @@ export default function Reports() {
   const [date, setDate] = useState(todayISO())
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
+  const [productSales, setProductSales] = useState<ProductDailyReport[]>([])
   const [preview, setPreview] = useState<ClosingPreview | null>(null)
   const [closings, setClosings] = useState<DailyClosing[]>([])
   const [openingCash, setOpeningCash] = useState('0')
   const [actualClosing, setActualClosing] = useState('0')
   const [closingNotes, setClosingNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const reportLoadId = useRef(0)
 
-  async function load(d = date) {
+  const load = useCallback(async (d: string) => {
+    const requestId = ++reportLoadId.current
     setLoading(true)
+    setSummary(null)
+    setOrders([])
+    setProductSales([])
+    setPreview(null)
     try {
-      const opening = Number(openingCash) || 0
-      const [report, prev, history] = await Promise.all([
+      const [report, history, existing] = await Promise.all([
         window.api.getDailyReport(d),
-        window.api.previewClosing(d, opening),
         window.api.listClosings(),
+        window.api.getClosing(d),
       ])
+      const opening = Number(existing?.opening_cash) || 0
+      const prev = await window.api.previewClosing(d, opening)
+      if (requestId !== reportLoadId.current) return
       setSummary(report.summary)
       setOrders(report.orders)
+      setProductSales(report.products)
       setPreview(prev)
       setClosings(history)
 
-      const existing = await window.api.getClosing(d)
       if (existing) {
         setOpeningCash(String(existing.opening_cash ?? 0))
         setActualClosing(String(existing.actual_closing_cash ?? 0))
         setClosingNotes(existing.notes || '')
+      } else {
+        setOpeningCash('0')
+        setActualClosing('0')
+        setClosingNotes('')
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load report')
+      if (requestId === reportLoadId.current) {
+        toast.error(e instanceof Error ? e.message : 'Failed to load report')
+      }
     } finally {
-      setLoading(false)
+      if (requestId === reportLoadId.current) setLoading(false)
     }
-  }
+  }, [toast])
 
   useEffect(() => {
-    void load()
-  }, [])
+    void load(date)
+  }, [date, load])
 
   async function refreshPreview() {
     try {
@@ -103,33 +118,50 @@ export default function Reports() {
       Status: o.status,
       Date: o.created_at,
     }))
-    exportToExcel([...summaryRows, {}, ...orderRows], `daily-report-${summary.date}`)
+    const productRows = productSales.map((product) => ({
+      Product: product.product_name,
+      'Quantity sold': product.quantity_sold,
+      'Gross sales': product.gross_sales,
+      'Discount allocated': product.discount_allocated,
+      'Net earnings': product.net_sales,
+    }))
+    exportToExcel(
+      [...summaryRows, {}, { Product: 'PRODUCT-WISE SALES' }, ...productRows, {}, ...orderRows],
+      `daily-report-${summary.date}`
+    )
     toast.success('Excel exported')
   }
 
   function exportPdf() {
     if (!summary) return
-    const columns = ['Metric', 'Value']
+    const columns = ['Report item', 'Quantity / Value', 'Gross sales', 'Discount share', 'Net earnings']
     const rows: Array<Array<string | number>> = [
-      ['Date', summary.date],
-      ['Total sales', formatMoney(summary.totalSales)],
-      ['Orders', summary.totalOrders],
-      ['Products sold', summary.productsSold],
-      ['Cash / Card / Other', `${formatMoney(summary.cashSales)} / ${formatMoney(summary.cardSales)} / ${formatMoney(summary.otherSales)}`],
-      ['Discounts', formatMoney(summary.totalDiscounts)],
-      ['Cancelled', summary.cancelledOrders],
-      ['Expenses', formatMoney(summary.totalExpenses)],
-      ['Gross profit', formatMoney(summary.grossProfit)],
-      ['Net profit', formatMoney(summary.netProfit)],
-      ['—', '—'],
-      ['Order #', 'Total'],
-      ...orders.map((o) => [o.order_number, formatMoney(o.grand_total)]),
+      ['Date', summary.date, '', '', ''],
+      ['Total sales', formatMoney(summary.totalSales), '', '', ''],
+      ['Orders', summary.totalOrders, '', '', ''],
+      ['Products sold', summary.productsSold, '', '', ''],
+      ['Cash / Card / Other', `${formatMoney(summary.cashSales)} / ${formatMoney(summary.cardSales)} / ${formatMoney(summary.otherSales)}`, '', '', ''],
+      ['Discounts', formatMoney(summary.totalDiscounts), '', '', ''],
+      ['Cancelled', summary.cancelledOrders, '', '', ''],
+      ['Expenses', formatMoney(summary.totalExpenses), '', '', ''],
+      ['Gross profit', formatMoney(summary.grossProfit), '', '', ''],
+      ['Net profit', formatMoney(summary.netProfit), '', '', ''],
+      ['PRODUCT-WISE SALES', '', '', '', ''],
+      ...productSales.map((product) => [
+        product.product_name,
+        formatQty(product.quantity_sold),
+        formatMoney(product.gross_sales),
+        formatMoney(product.discount_allocated),
+        formatMoney(product.net_sales),
+      ]),
+      ['DAY ORDERS', '', '', '', ''],
+      ...orders.map((o) => [o.order_number, o.payment_method, '', '', formatMoney(o.grand_total)]),
     ]
     exportToPdf(`Daily report ${summary.date}`, columns, rows, `daily-report-${summary.date}`)
     toast.success('PDF exported')
   }
 
-  if (loading && !summary) return <Loading label="Loading report..." />
+  if (loading) return <Loading label="Loading report..." />
 
   const cards = summary
     ? [
@@ -146,6 +178,15 @@ export default function Reports() {
         { label: 'Net profit', value: formatMoney(summary.netProfit) },
       ]
     : []
+  const productTotals = productSales.reduce(
+    (totals, product) => ({
+      quantity: totals.quantity + product.quantity_sold,
+      gross: totals.gross + product.gross_sales,
+      discount: totals.discount + product.discount_allocated,
+      net: totals.net + product.net_sales,
+    }),
+    { quantity: 0, gross: 0, discount: 0, net: 0 }
+  )
 
   return (
     <div>
@@ -168,7 +209,10 @@ export default function Reports() {
         <input
           type="date"
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={(e) => {
+            const selectedDate = e.target.value
+            setDate(selectedDate)
+          }}
         />
         <button
           type="button"
@@ -188,6 +232,71 @@ export default function Reports() {
             </div>
           ))}
         </div>
+      )}
+
+      {summary && (
+        <section className="card product-sales-report">
+          <div className="product-sales-header">
+            <div>
+              <span className="product-sales-kicker">DAILY CLOSING</span>
+              <h2>Product-wise sales</h2>
+              <p>{formatDate(summary.date)} · completed orders only</p>
+            </div>
+            <div className="product-sales-net">
+              <span>Net product earnings</span>
+              <strong>{formatMoney(productTotals.net)}</strong>
+            </div>
+          </div>
+          <div className="product-sales-metrics">
+            <div>
+              <span>Items sold</span>
+              <strong>{formatQty(productTotals.quantity)}</strong>
+            </div>
+            <div>
+              <span>Gross product sales</span>
+              <strong>{formatMoney(productTotals.gross)}</strong>
+            </div>
+            <div>
+              <span>Discount share</span>
+              <strong>{formatMoney(productTotals.discount)}</strong>
+            </div>
+          </div>
+          {productSales.length === 0 ? (
+            <EmptyState title="No product sales for this date" hint="Sales will appear here after completed orders." />
+          ) : (
+            <div className="table-wrap">
+              <table className="data product-sales-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="number">Qty sold</th>
+                    <th className="number">Gross sales</th>
+                    <th className="number">Discount share</th>
+                    <th className="number">Net earnings</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productSales.map((product) => (
+                    <tr key={product.product_name}>
+                      <td><strong>{product.product_name}</strong></td>
+                      <td className="number">{formatQty(product.quantity_sold)}</td>
+                      <td className="number">{formatMoney(product.gross_sales)}</td>
+                      <td className="number">{formatMoney(product.discount_allocated)}</td>
+                      <td className="number">{formatMoney(product.net_sales)}</td>
+                    </tr>
+                  ))}
+                  <tr className="product-sales-total">
+                    <td>Total</td>
+                    <td className="number">{formatQty(productTotals.quantity)}</td>
+                    <td className="number">{formatMoney(productTotals.gross)}</td>
+                    <td className="number">{formatMoney(productTotals.discount)}</td>
+                    <td className="number">{formatMoney(productTotals.net)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
 
       <div className="split-2" style={{ marginBottom: 16 }}>

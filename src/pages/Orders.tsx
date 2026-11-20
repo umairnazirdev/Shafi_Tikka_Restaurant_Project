@@ -212,6 +212,12 @@ export default function Orders() {
             </div>
             <div>
               <div className="muted" style={{ fontSize: 12 }}>
+                Waiter
+              </div>
+              <strong>{detail.waiter_name || '—'}</strong>
+            </div>
+            <div>
+              <div className="muted" style={{ fontSize: 12 }}>
                 Phone
               </div>
               <strong>{detail.customer_phone || '—'}</strong>

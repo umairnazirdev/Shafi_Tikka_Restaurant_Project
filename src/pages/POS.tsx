@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Minus, Trash2, Printer, Save, RotateCcw } from 'lucide-react'
+import { Plus, Minus, Trash2, Printer, ChevronDown, Check } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
 import { formatMoney } from '../lib/format'
 import { Loading } from '../components/ui/Loading'
 import { EmptyState } from '../components/ui/EmptyState'
+import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { ProductThumb } from '../components/ProductThumb'
 import { ProductQuantitySelector } from '../components/ui/ProductQuantitySelector'
 
@@ -21,6 +22,34 @@ type DraftOrder = {
   discount: number
   paymentMethod: 'cash' | 'card' | 'other'
   cashReceived: number
+  waiterId: number | null
+}
+
+type ProductStockAlert = {
+  productId: number
+  message: string
+}
+
+function getStockAlerts(items: CartLine[], products: Product[]): ProductStockAlert[] {
+  const requestedByProduct = new Map<number, number>()
+  for (const item of items) {
+    requestedByProduct.set(
+      item.product_id,
+      (requestedByProduct.get(item.product_id) ?? 0) + item.quantity
+    )
+  }
+
+  return products.flatMap((product) => {
+    const requested = requestedByProduct.get(product.id)
+    if (product.is_available !== 1 || requested === undefined || product.quantity >= requested) {
+      return []
+    }
+
+    return [{
+      productId: product.id,
+      message: `${product.name}: insufficient quantity. Need ${requested}, available ${product.quantity}.`,
+    }]
+  })
 }
 
 type PosOutletContext = {
@@ -31,7 +60,7 @@ type PosOutletContext = {
 
 export default function POS() {
   const toast = useToast()
-  const { posView: activeView, setDraftOrderCount } = useOutletContext<PosOutletContext>()
+  const { posView: activeView, setPosView, setDraftOrderCount } = useOutletContext<PosOutletContext>()
   const [loading, setLoading] = useState(true)
   const [desktopUnavailable, setDesktopUnavailable] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
@@ -45,16 +74,31 @@ export default function POS() {
     discount: 0,
     paymentMethod: 'cash',
     cashReceived: 0,
+    waiterId: null,
   }])
   const [activeDraftNumber, setActiveDraftNumber] = useState(1)
   const [nextDraftNumber, setNextDraftNumber] = useState(2)
+  const [waiters, setWaiters] = useState<Waiter[]>([])
+  const [selectedWaiterId, setSelectedWaiterId] = useState<number | null>(null)
+  const waiterDropdownRef = useRef<HTMLDetailsElement>(null)
+  const [waiterDeleteTarget, setWaiterDeleteTarget] = useState<Waiter | null>(null)
+  const [deletingWaiter, setDeletingWaiter] = useState(false)
   const [cartQuantityDrafts, setCartQuantityDrafts] = useState<Record<number, string>>({})
   const [discount, setDiscount] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'other'>('cash')
   const [cashReceived, setCashReceived] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [lastOrderId, setLastOrderId] = useState<number | null>(null)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<number, number>>({})
+  const [stockAlerts, setStockAlerts] = useState<ProductStockAlert[]>([])
+
+  useEffect(() => {
+    if (stockAlerts.length === 0) return
+    document
+      .querySelector<HTMLElement>(`[data-product-id="${stockAlerts[0].productId}"]`)
+      ?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    const timeout = window.setTimeout(() => setStockAlerts([]), 15_000)
+    return () => window.clearTimeout(timeout)
+  }, [stockAlerts])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -63,12 +107,14 @@ export default function POS() {
         setDesktopUnavailable(true)
         return
       }
-      const [cats, prods] = await Promise.all([
+      const [cats, prods, waiterRows] = await Promise.all([
         window.api.listCategories(),
-        window.api.listProducts({ available_only: true }),
+        window.api.listProducts(),
+        window.api.listWaiters(),
       ])
       setCategories(cats)
       setProducts(prods)
+      setWaiters(waiterRows)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load products')
     } finally {
@@ -91,6 +137,7 @@ export default function POS() {
     setDiscount(draft.discount)
     setPaymentMethod(draft.paymentMethod)
     setCashReceived(draft.cashReceived)
+    setSelectedWaiterId(draft.waiterId)
   }
 
   function openDraft(number: number) {
@@ -105,6 +152,7 @@ export default function POS() {
       discount: 0,
       paymentMethod: 'cash',
       cashReceived: 0,
+      waiterId: selectedWaiterId,
     }
     setDraftOrders((prev) => [...prev, draft])
     setNextDraftNumber((prev) => prev + 1)
@@ -155,6 +203,20 @@ export default function POS() {
     syncDraft({ cart: nextCart })
   }
 
+  function tryAddProduct(product: Product, quantity = 1): boolean {
+    const requested = qtyInCart(product.id) + quantity
+    if (product.is_available === 1 && requested > product.quantity) {
+      showStockAlerts([{
+        productId: product.id,
+        message: `${product.name}: insufficient quantity. Need ${requested}, available ${product.quantity}.`,
+      }])
+      return false
+    }
+
+    addProduct(product, quantity)
+    return true
+  }
+
   function setSelectedQuantity(productId: number, quantity: number) {
     setSelectedQuantities((prev) => ({ ...prev, [productId]: Math.max(1, quantity) }))
   }
@@ -175,16 +237,58 @@ export default function POS() {
     }
   }
 
-  function clearCart() {
-    setCart([])
-    setCartQuantityDrafts({})
-    setDiscount(0)
-    setPaymentMethod('cash')
-    setCashReceived(0)
-    syncDraft({ cart: [], discount: 0, paymentMethod: 'cash', cashReceived: 0 })
+  function showStockAlerts(alerts: ProductStockAlert[]) {
+    setStockAlerts(alerts)
+    setSearch('')
+    setCategoryId('all')
+    setPosView('menu')
   }
 
-  async function saveOrder(printAfter: boolean) {
+  async function refreshWaiters() {
+    try {
+      const rows = await window.api.listWaiters()
+      setWaiters(rows)
+      if (selectedWaiterId !== null && !rows.some((waiter) => waiter.id === selectedWaiterId)) {
+        setSelectedWaiterId(null)
+        syncDraft({ waiterId: null })
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load waiters')
+    }
+  }
+
+  function chooseWaiter(value: string) {
+    const waiterId = value ? Number(value) : null
+    setSelectedWaiterId(waiterId)
+    syncDraft({ waiterId })
+  }
+
+  async function deleteWaiter() {
+    if (!waiterDeleteTarget || deletingWaiter) return
+    setDeletingWaiter(true)
+    try {
+      await window.api.deleteWaiter(waiterDeleteTarget.id)
+      setWaiters((current) => current.filter((waiter) => waiter.id !== waiterDeleteTarget.id))
+      setDraftOrders((current) =>
+        current.map((draft) =>
+          draft.waiterId === waiterDeleteTarget.id ? { ...draft, waiterId: null } : draft
+        )
+      )
+      if (selectedWaiterId === waiterDeleteTarget.id) {
+        setSelectedWaiterId(null)
+        syncDraft({ waiterId: null })
+      }
+      setWaiterDeleteTarget(null)
+      waiterDropdownRef.current?.removeAttribute('open')
+      toast.success(`${waiterDeleteTarget.name} removed`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to remove waiter')
+    } finally {
+      setDeletingWaiter(false)
+    }
+  }
+
+  async function saveOrder() {
     if (!cart.length) {
       toast.error('Add products to the order first')
       return
@@ -194,12 +298,22 @@ export default function POS() {
       return
     }
 
+    setStockAlerts([])
     setSaving(true)
     try {
+      const currentProducts = await window.api.listProducts()
+      setProducts(currentProducts)
+      const stockAlerts = getStockAlerts(cart, currentProducts)
+      if (stockAlerts.length > 0) {
+        showStockAlerts(stockAlerts)
+        return
+      }
+
       const result = await window.api.createOrder({
         customer_name: '',
         customer_phone: '',
         notes: '',
+        waiter_id: selectedWaiterId,
         discount: safeDiscount,
         payment_method: paymentMethod,
         cash_received: paymentMethod === 'cash' ? Number(cashReceived) || grandTotal : 0,
@@ -210,11 +324,31 @@ export default function POS() {
           unit_price: c.unit_price,
         })),
       })
-      setLastOrderId(result.id)
-      toast.success(`Order ${result.order_number} saved`)
-      if (printAfter) {
-        await window.api.printReceipt(result.id)
+      try {
+        setProducts(await window.api.listProducts())
+      } catch (refreshError) {
+        const soldByProduct = new Map<number, number>()
+        for (const item of cart) {
+          soldByProduct.set(
+            item.product_id,
+            (soldByProduct.get(item.product_id) ?? 0) + item.quantity
+          )
+        }
+        setProducts(currentProducts.map((product) => ({
+          ...product,
+          quantity:
+            product.is_available === 1
+              ? Math.max(0, product.quantity - (soldByProduct.get(product.id) ?? 0))
+              : product.quantity,
+        })))
+        toast.error(
+          `Order saved, but product quantities could not refresh: ${
+            refreshError instanceof Error ? refreshError.message : 'Unknown error'
+          }`
+        )
       }
+      toast.success(`Order ${result.order_number} saved`)
+      await window.api.printInvoice(result.id)
       const remaining = draftOrders
         .filter((draft) => draft.number !== activeDraftNumber)
         .sort((a, b) => a.number - b.number)
@@ -234,28 +368,36 @@ export default function POS() {
           discount: 0,
           paymentMethod: 'cash',
           cashReceived: 0,
+          waiterId: selectedWaiterId,
         }
         setDraftOrders([draft])
         setNextDraftNumber((prev) => prev + 1)
         activateDraft(draft)
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not save order')
+      const message = e instanceof Error ? e.message : 'Could not save order'
+      if (message.includes('Insufficient quantity for ')) {
+        try {
+          const currentProducts = await window.api.listProducts()
+          setProducts(currentProducts)
+          const stockAlerts = getStockAlerts(cart, currentProducts)
+          if (stockAlerts.length > 0) {
+            showStockAlerts(stockAlerts)
+            return
+          }
+        } catch (refreshError) {
+          toast.error(
+            `Order failed: ${message}. Could not refresh product quantities: ${
+              refreshError instanceof Error ? refreshError.message : 'Unknown error'
+            }`,
+            15_000
+          )
+          return
+        }
+      }
+      toast.error(message)
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function reprintLast() {
-    if (!lastOrderId) {
-      toast.info('Save an order before printing an invoice')
-      return
-    }
-    try {
-      await window.api.printInvoice(lastOrderId)
-      toast.success('Invoice preview opened')
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Print failed')
     }
   }
 
@@ -323,30 +465,38 @@ export default function POS() {
             {filtered.map((p) => {
               const qty = qtyInCart(p.id)
               const selectedQuantity = selectedQuantities[p.id] ?? 1
+              const stockAlert = stockAlerts.find((alert) => alert.productId === p.id)
               return (
                 <div
                   key={p.id}
-                  className="product-tile"
+                  data-product-id={p.id}
+                  className={`product-tile ${stockAlert ? 'has-stock-alert' : ''}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => addProduct(p)}
+                  onClick={() => tryAddProduct(p)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      addProduct(p)
+                      tryAddProduct(p)
                     }
                   }}
                 >
                   {qty > 0 && <span className="qty-badge">{qty}</span>}
                   <ProductThumb name={p.name} imagePath={p.image_path} />
                   <strong>{p.name}</strong>
+                  {stockAlert && (
+                    <div className="product-stock-alert" role="alert">
+                      {stockAlert.message}
+                    </div>
+                  )}
                   <div className="price">{formatMoney(p.selling_price)}</div>
                   <ProductQuantitySelector
                     quantity={selectedQuantity}
                     onQuantityChange={(quantity) => setSelectedQuantity(p.id, quantity)}
                     onAdd={(quantity) => {
-                      addProduct(p, quantity)
-                      setSelectedQuantity(p.id, 1)
+                      if (tryAddProduct(p, quantity)) {
+                        setSelectedQuantity(p.id, 1)
+                      }
                     }}
                   />
                 </div>
@@ -380,14 +530,9 @@ export default function POS() {
       <aside className="cart-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2>Order #{activeDraftNumber}</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button type="button" className="btn pos-new-button" onClick={createNewOrder}>
-              <Plus size={14} /> New
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={clearCart} title="Clear current order">
-              <RotateCcw size={16} /> Clear
-            </button>
-          </div>
+          <button type="button" className="btn pos-new-button" onClick={createNewOrder}>
+            <Plus size={14} /> New
+          </button>
         </div>
 
         <div className="cart-list">
@@ -469,6 +614,7 @@ export default function POS() {
             <label>
               Payment
               <select
+                className="pos-payment-select"
                 value={paymentMethod}
                 onChange={(e) => {
                   const nextPayment = e.target.value as 'cash' | 'card' | 'other'
@@ -481,6 +627,67 @@ export default function POS() {
                 <option value="other">Other</option>
               </select>
             </label>
+          </div>
+          <div className="pos-waiter-field">
+            Waiter on counter
+            <details
+              ref={waiterDropdownRef}
+              className="pos-waiter-dropdown"
+              onToggle={(event) => {
+                if (event.currentTarget.open) void refreshWaiters()
+              }}
+            >
+              <summary className="pos-waiter-trigger">
+                <span>{waiters.find((waiter) => waiter.id === selectedWaiterId)?.name || 'Select waiter'}</span>
+                <ChevronDown size={16} />
+              </summary>
+              <div className="pos-waiter-menu" role="group" aria-label="Choose waiter on counter">
+                <button
+                  type="button"
+                  className="pos-waiter-option"
+                  aria-pressed={selectedWaiterId === null}
+                  onClick={() => {
+                    chooseWaiter('')
+                    waiterDropdownRef.current?.removeAttribute('open')
+                  }}
+                >
+                  <span className="pos-waiter-check">
+                    {selectedWaiterId === null && <Check size={14} />}
+                  </span>
+                  <span>No waiter selected</span>
+                </button>
+                {waiters.map((waiter) => (
+                  <div key={waiter.id} className="pos-waiter-option-row">
+                    <button
+                      type="button"
+                      className="pos-waiter-option"
+                      aria-pressed={selectedWaiterId === waiter.id}
+                      onClick={() => {
+                        chooseWaiter(String(waiter.id))
+                        waiterDropdownRef.current?.removeAttribute('open')
+                      }}
+                    >
+                      <span className="pos-waiter-check">
+                        {selectedWaiterId === waiter.id && <Check size={14} />}
+                      </span>
+                      <span>{waiter.name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="pos-waiter-delete"
+                      aria-label={`Remove ${waiter.name}`}
+                      title={`Remove ${waiter.name}`}
+                      onClick={() => setWaiterDeleteTarget(waiter)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                {waiters.length === 0 && (
+                  <span className="pos-waiter-empty">No waiters added</span>
+                )}
+              </div>
+            </details>
           </div>
           {paymentMethod === 'cash' && (
             <label>
@@ -515,31 +722,30 @@ export default function POS() {
         </div>
 
         <div className="cart-actions">
-          <button type="button" className="btn btn-ghost" onClick={clearCart} disabled={saving}>
-            Clear Cart
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={() => void reprintLast()} disabled={saving}>
-            <Printer size={16} /> Print
-          </button>
           <button
             type="button"
-            className="btn btn-primary"
-            onClick={() => void saveOrder(false)}
+            className="pos-print-button"
+            onClick={() => void saveOrder()}
             disabled={saving || !cart.length}
           >
-            <Save size={16} /> Save Order
-          </button>
-          <button
-            type="button"
-            className="btn btn-success span-2 btn-lg"
-            onClick={() => void saveOrder(true)}
-            disabled={saving || !cart.length}
-          >
-            <Printer size={16} /> Save & Print
+            <span className="pos-print-icon"><Printer size={20} /></span>
+            <span>{saving ? 'Printing...' : 'Print'}</span>
           </button>
         </div>
       </aside>
       </div>
+      {waiterDeleteTarget && (
+        <ConfirmDialog
+          title="Remove waiter"
+          message={`Remove ${waiterDeleteTarget.name} from the waiter list?`}
+          confirmLabel={deletingWaiter ? 'Removing...' : 'Remove waiter'}
+          danger
+          onClose={() => {
+            if (!deletingWaiter) setWaiterDeleteTarget(null)
+          }}
+          onConfirm={() => void deleteWaiter()}
+        />
+      )}
     </div>
   )
 }

@@ -24,6 +24,7 @@ export function runMigrations(db: Database.Database): void {
       category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
       selling_price REAL NOT NULL DEFAULT 0,
       purchase_cost REAL NOT NULL DEFAULT 0,
+      quantity INTEGER NOT NULL DEFAULT 0,
       image_path TEXT,
       is_available INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
@@ -52,6 +53,7 @@ export function runMigrations(db: Database.Database): void {
       customer_name TEXT,
       customer_phone TEXT,
       notes TEXT,
+      waiter_id INTEGER REFERENCES waiters(id) ON DELETE SET NULL,
       subtotal REAL NOT NULL DEFAULT 0,
       discount REAL NOT NULL DEFAULT 0,
       grand_total REAL NOT NULL DEFAULT 0,
@@ -78,6 +80,7 @@ export function runMigrations(db: Database.Database): void {
       unit_price REAL NOT NULL DEFAULT 0,
       line_total REAL NOT NULL DEFAULT 0,
       unit_cost REAL NOT NULL DEFAULT 0,
+      stock_deducted INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
@@ -195,4 +198,16 @@ export function runMigrations(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
   `)
+  const productColumns = db.prepare(`PRAGMA table_info(products)`).all() as Array<{ name: string }>
+  if (!productColumns.some((column) => column.name === 'quantity')) {
+    db.exec(`ALTER TABLE products ADD COLUMN quantity INTEGER NOT NULL DEFAULT 0`)
+  }
+  const orderItemColumns = db.prepare(`PRAGMA table_info(order_items)`).all() as Array<{ name: string }>
+  if (!orderItemColumns.some((column) => column.name === 'stock_deducted')) {
+    db.exec(`ALTER TABLE order_items ADD COLUMN stock_deducted INTEGER NOT NULL DEFAULT 0`)
+  }
+  const orderColumns = db.prepare(`PRAGMA table_info(orders)`).all() as Array<{ name: string }>
+  if (!orderColumns.some((column) => column.name === 'waiter_id')) {
+    db.exec(`ALTER TABLE orders ADD COLUMN waiter_id INTEGER REFERENCES waiters(id) ON DELETE SET NULL`)
+  }
 }

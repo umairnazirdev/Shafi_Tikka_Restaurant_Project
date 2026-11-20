@@ -14,9 +14,11 @@ interface Window {
     deleteCategory(id: number): Promise<{ success: boolean }>
     listWaiters(): Promise<Waiter[]>
     createWaiter(name: string): Promise<{ id: number }>
+    deleteWaiter(id: number): Promise<{ success: boolean }>
     listProducts(filters?: { search?: string; available_only?: boolean; category_id?: number }): Promise<Product[]>
     createProduct(data: unknown): Promise<{ id: number }>
     updateProduct(id: number, data: unknown): Promise<{ success: boolean }>
+    addProductQuantity(id: number, quantity: number): Promise<{ quantity: number }>
     deleteProduct(id: number): Promise<{ success?: boolean; softDeleted?: boolean }>
     createOrder(data: unknown): Promise<{ id: number; order_number: string; grand_total: number; change_amount: number }>
     listOrders(filters?: unknown): Promise<Order[]>
@@ -25,7 +27,11 @@ interface Window {
     printReceipt(orderId: number): Promise<{ success: boolean }>
     printInvoice(orderId: number): Promise<{ success: boolean }>
     getDashboardStats(): Promise<DashboardStats>
-    getDailyReport(date?: string): Promise<{ summary: DailySummary; orders: Order[] }>
+    getDailyReport(date?: string): Promise<{
+      summary: DailySummary
+      orders: Order[]
+      products: ProductDailyReport[]
+    }>
     listMaterials(search?: string): Promise<RawMaterial[]>
     createMaterial(data: unknown): Promise<{ id: number }>
     updateMaterial(id: number, data: unknown): Promise<{ success: boolean }>
@@ -69,6 +75,7 @@ interface Product {
   category_name?: string
   selling_price: number
   purchase_cost: number
+  quantity: number
   image_path: string | null
   is_available: number
   sort_order: number
@@ -80,6 +87,7 @@ interface Order {
   customer_name: string | null
   customer_phone: string | null
   notes: string | null
+  waiter_id: number | null
   subtotal: number
   discount: number
   grand_total: number
@@ -101,6 +109,7 @@ interface OrderItem {
 }
 
 interface OrderDetail extends Order {
+  waiter_name: string | null
   items: OrderItem[]
   payments: Array<{ method: string; amount: number }>
 }
@@ -186,6 +195,14 @@ interface DailySummary {
   cogs: number
   grossProfit: number
   netProfit: number
+}
+
+interface ProductDailyReport {
+  product_name: string
+  quantity_sold: number
+  gross_sales: number
+  discount_allocated: number
+  net_sales: number
 }
 
 interface DashboardStats extends DailySummary {
